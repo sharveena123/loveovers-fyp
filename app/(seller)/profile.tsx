@@ -158,7 +158,10 @@ export default function ProfileScreen() {
                 <Text style={styles.infoText}>{profile.email}</Text>
               </View>
             </View>
-            <TouchableOpacity style={styles.editButton}>
+            <TouchableOpacity 
+              style={styles.editButton}
+              onPress={() => router.push('/(seller)/sellereditprofile')}
+            >
               <Edit2 size={18} color={colors.primary} />
             </TouchableOpacity>
           </View>

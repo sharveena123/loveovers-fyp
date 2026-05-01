@@ -1,19 +1,19 @@
-import { auth } from '@/src/services/firebase/config'
-import { colors } from '@/src/theme/styles'
-import { router, Tabs } from 'expo-router'
-import { Home, Package, User } from 'lucide-react-native'
-import { useEffect } from 'react'
+import { auth } from "@/src/services/firebase/config";
+import { colors } from "@/src/theme/styles";
+import { router, Tabs } from "expo-router";
+import { Home, MessageSquare, Package, User } from "lucide-react-native";
+import { useEffect } from "react";
 
 export default function SellerLayout() {
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((user) => {
       if (!user) {
-        router.replace('/(auth)/login')
+        router.replace("/(auth)/login");
       }
-    })
+    });
 
-    return () => unsubscribe()
-  }, [])
+    return () => unsubscribe();
+  }, []);
 
   return (
     <Tabs
@@ -25,37 +25,62 @@ export default function SellerLayout() {
           height: 70,
           paddingBottom: 10,
           paddingTop: 5,
-          backgroundColor: '#fff',
+          backgroundColor: "#fff",
           borderTopColor: colors.border,
           borderTopWidth: 1,
         },
         tabBarLabelStyle: {
           fontSize: 12,
-          fontWeight: '500',
+          fontWeight: "500",
         },
       }}
     >
       <Tabs.Screen
         name="dashboard"
         options={{
-          title: 'Dashboard',
+          title: "Home",
           tabBarIcon: ({ color, size }) => <Home color={color} size={size} />,
         }}
       />
       <Tabs.Screen
         name="orders"
         options={{
-          title: 'Orders',
-          tabBarIcon: ({ color, size }) => <Package color={color} size={size} />,
+          title: "Orders",
+          tabBarIcon: ({ color, size }) => (
+            <Package color={color} size={size} />
+          ),
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
-          title: 'Profile',
+          title: "Profile",
           tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
         }}
       />
+      <Tabs.Screen
+        name="sellerchat"
+        options={{
+          title: "Chat",
+          tabBarIcon: ({ color, size }) => (
+            <MessageSquare color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="support"
+        options={{
+          href: null,
+          title: "",
+        }}
+      />
+      <Tabs.Screen
+        name="chat/[id]"
+        options={{
+          href: null,
+          title: "",
+        }}
+      />
     </Tabs>
-  )
+  );
 }

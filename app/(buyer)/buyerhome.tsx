@@ -6,7 +6,15 @@ import {
 import { BuyerStats, getBuyerStats } from "@/src/services/firebase/buyerStats";
 import { auth } from "@/src/services/firebase/config";
 import { colors, spacing } from "@/src/theme/styles";
-import { router } from "expo-router";
+import {
+  addRecentLocation,
+  getPreferredLocation,
+  getRecentLocations,
+  savePreferredLocation,
+} from "@/src/utils/locationPreference";
+import Constants from "expo-constants";
+import * as Location from "expo-location";
+import { router, useFocusEffect } from "expo-router";
 import {
   Clock,
   MapPin,
@@ -14,10 +22,12 @@ import {
   Star,
   TrendingDown,
   User,
+  X,
 } from "lucide-react-native";
-import React, { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Image,
   SafeAreaView,
   ScrollView,
@@ -26,23 +36,86 @@ import {
   View,
 } from "react-native";
 
+type MapLocation = {
+  latitude: number;
+  longitude: number;
+};
+
+type LocationSuggestion = {
+  label: string;
+  placeId?: string;
+  latitude?: number;
+  longitude?: number;
+};
+
+const QUICK_CITY_LOCATIONS: LocationSuggestion[] = [
+  { label: "Kuala Lumpur", latitude: 3.139, longitude: 101.6869 },
+  { label: "Petaling Jaya", latitude: 3.1073, longitude: 101.6067 },
+  { label: "Shah Alam", latitude: 3.0738, longitude: 101.5183 },
+  { label: "Subang Jaya", latitude: 3.0433, longitude: 101.5816 },
+  { label: "George Town", latitude: 5.4141, longitude: 100.3288 },
+];
+
+const GOOGLE_PLACES_API_KEY =
+  process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY ||
+  (Constants.expoConfig?.extra?.googlePlacesApiKey as string | undefined) ||
+  "";
+
+const getDistanceKm = (
+  fromLat: number,
+  fromLon: number,
+  toLat: number,
+  toLon: number,
+) => {
+  const R = 6371;
+  const dLat = ((toLat - fromLat) * Math.PI) / 180;
+  const dLon = ((toLon - fromLon) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((fromLat * Math.PI) / 180) *
+      Math.cos((toLat * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+
+  return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+};
+
 export default function BuyerHome() {
   const [stats, setStats] = useState<BuyerStats | null>(null);
   const [bags, setBags] = useState<AvailableBag[]>([]);
   const [filteredBags, setFilteredBags] = useState<AvailableBag[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [locationSearchQuery, setLocationSearchQuery] = useState("");
+  const [settingLocation, setSettingLocation] = useState(false);
+  const [searchingLocation, setSearchingLocation] = useState(false);
+  const [locationSuggestions, setLocationSuggestions] = useState<
+    LocationSuggestion[]
+  >([]);
+  const [recentLocations, setRecentLocations] = useState<LocationSuggestion[]>(
+    [],
+  );
   const [location, setLocation] = useState("Brickfields, KL");
+  const [userLocation, setUserLocation] = useState<MapLocation>({
+    latitude: 3.139,
+    longitude: 101.6869,
+  });
+  const [headerSearchActive, setHeaderSearchActive] = useState(false);
 
+  // 🔹 INITIALIZATION
   useEffect(() => {
-    loadData();
+    initApp();
   }, []);
 
-  useEffect(() => {
-    filterBags();
-  }, [bags, searchQuery]);
+  // 🔹 Reset header search when navigating back to this page
+  useFocusEffect(
+    useCallback(() => {
+      setHeaderSearchActive(false);
+      setLocationSearchQuery("");
+      setLocationSuggestions([]);
+    }, []),
+  );
 
-  const loadData = async () => {
+  const initApp = async () => {
     const user = auth.currentUser;
     if (!user) {
       router.replace("/(auth)/login");
@@ -51,22 +124,353 @@ export default function BuyerHome() {
 
     setLoading(true);
     try {
-      const [buyerStats, availableBags] = await Promise.all([
-        getBuyerStats(user.uid),
-        getAvailableBags(),
-      ]);
-
+      const buyerStats = await getBuyerStats(user.uid);
       setStats(buyerStats);
-      setBags(availableBags);
-      setFilteredBags(availableBags);
+      const recent = await getRecentLocations();
+      setRecentLocations(recent);
+
+      const preferredLocation = await getPreferredLocation();
+
+      if (preferredLocation) {
+        const selectedLocation: MapLocation = {
+          latitude: preferredLocation.latitude,
+          longitude: preferredLocation.longitude,
+        };
+
+        setLocation(preferredLocation.label);
+        setUserLocation(selectedLocation);
+        await loadBagsByLocation(selectedLocation);
+      } else {
+        const currentLocation = await getCurrentLocation();
+        const label = await resolveLocationLabel(
+          currentLocation,
+          "Current location",
+        );
+
+        setLocation(label);
+        setUserLocation(currentLocation);
+        await savePreferredLocation({ ...currentLocation, label });
+        await loadBagsByLocation(currentLocation);
+      }
     } catch (error) {
-      console.error("Error loading data:", error);
+      console.error("Error initializing app:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  const filterBags = () => {
+  const loadBagsByLocation = async (loc: MapLocation) => {
+    const availableBags = await getAvailableBags(loc);
+
+    const recalculated = availableBags
+      .map((bag) => {
+        const lat = Number(bag.latitude);
+        const lng = Number(bag.longitude);
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return bag;
+        }
+
+        return {
+          ...bag,
+          distance: getDistanceKm(loc.latitude, loc.longitude, lat, lng),
+        };
+      })
+      .sort((a, b) => a.distance - b.distance);
+
+    setBags(recalculated);
+    setFilteredBags(recalculated);
+  };
+
+  const persistRecent = async (entry: {
+    latitude: number;
+    longitude: number;
+    label: string;
+  }) => {
+    const next = await addRecentLocation(entry);
+    setRecentLocations(next);
+  };
+
+  useEffect(() => {
+    const query = locationSearchQuery.trim();
+
+    if (query.length < 3) {
+      setLocationSuggestions([]);
+      setSearchingLocation(false);
+      return;
+    }
+
+    if (!GOOGLE_PLACES_API_KEY) {
+      setLocationSuggestions([]);
+      setSearchingLocation(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = setTimeout(async () => {
+      setSearchingLocation(true);
+
+      try {
+        const response = await fetch(
+          "https://places.googleapis.com/v1/places:autocomplete",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+              "X-Goog-FieldMask":
+                "suggestions.placePrediction.placeId,suggestions.placePrediction.text.text",
+            },
+            body: JSON.stringify({
+              input: query,
+              languageCode: "en",
+              includedRegionCodes: ["MY"],
+              locationBias: {
+                circle: {
+                  center: {
+                    latitude: 3.139,
+                    longitude: 101.6869,
+                  },
+                  radius: 50000,
+                },
+              },
+            }),
+          },
+        );
+
+        const payloadText = await response.text();
+        const data = payloadText
+          ? (JSON.parse(payloadText) as {
+              suggestions?: {
+                placePrediction?: {
+                  placeId?: string;
+                  text?: { text?: string } | string;
+                };
+              }[];
+              error?: { message?: string };
+            })
+          : {};
+
+        if (!response.ok) {
+          throw new Error(
+            data.error?.message ||
+              `Places autocomplete failed (${response.status})`,
+          );
+        }
+
+        if (data.error?.message) {
+          throw new Error(data.error.message);
+        }
+
+        if (cancelled) return;
+
+        const parsed = (data.suggestions || [])
+          .map((item) => {
+            const prediction = item.placePrediction;
+            const textValue = prediction?.text;
+            return {
+              label:
+                typeof textValue === "string"
+                  ? textValue
+                  : textValue?.text || "",
+              placeId: prediction?.placeId,
+            };
+          })
+          .filter((item) => item.label.length > 0 && !!item.placeId);
+
+        setLocationSuggestions(parsed);
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Location search failed:", error);
+          setLocationSuggestions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setSearchingLocation(false);
+        }
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [locationSearchQuery]);
+
+  const fetchGooglePlaceCoordinates = async (
+    placeId: string,
+  ): Promise<MapLocation | null> => {
+    if (!GOOGLE_PLACES_API_KEY) return null;
+
+    const response = await fetch(
+      `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+      {
+        headers: {
+          "X-Goog-Api-Key": GOOGLE_PLACES_API_KEY,
+          "X-Goog-FieldMask": "location,displayName",
+        },
+      },
+    );
+
+    const payloadText = await response.text();
+    const data = payloadText
+      ? (JSON.parse(payloadText) as {
+          location?: { latitude?: number; longitude?: number };
+          error?: { message?: string };
+        })
+      : {};
+
+    if (!response.ok) {
+      throw new Error(
+        data.error?.message || `Place details failed (${response.status})`,
+      );
+    }
+
+    if (data.error?.message) {
+      throw new Error(data.error.message);
+    }
+
+    const point = data.location;
+    if (!point) return null;
+
+    if (!Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)) {
+      return null;
+    }
+
+    return {
+      latitude: Number(point.latitude),
+      longitude: Number(point.longitude),
+    };
+  };
+
+  const applySelectedLocation = async (selection: LocationSuggestion) => {
+    let selectedLocation: MapLocation | null = null;
+
+    if (
+      Number.isFinite(selection.latitude) &&
+      Number.isFinite(selection.longitude)
+    ) {
+      selectedLocation = {
+        latitude: Number(selection.latitude),
+        longitude: Number(selection.longitude),
+      };
+    } else if (selection.placeId) {
+      selectedLocation = await fetchGooglePlaceCoordinates(selection.placeId);
+    }
+
+    if (!selectedLocation) {
+      throw new Error("Unable to resolve selected location coordinates");
+    }
+
+    setLocation(selection.label);
+    setUserLocation(selectedLocation);
+    await savePreferredLocation({
+      latitude: selectedLocation.latitude,
+      longitude: selectedLocation.longitude,
+      label: selection.label,
+    });
+    await persistRecent({
+      latitude: selectedLocation.latitude,
+      longitude: selectedLocation.longitude,
+      label: selection.label,
+    });
+
+    await loadBagsByLocation(selectedLocation);
+
+    setLocationSearchQuery(selection.label);
+    setLocationSuggestions([]);
+  };
+
+  const getCurrentLocation = async (): Promise<MapLocation> => {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+
+    if (status !== "granted") {
+      console.log("Permission denied, using fallback location");
+      return { latitude: 3.139, longitude: 101.6869 };
+    }
+
+    const loc = await Location.getCurrentPositionAsync({});
+    return { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+  };
+
+  const resolveLocationLabel = async (
+    loc: MapLocation,
+    fallbackLabel: string,
+  ): Promise<string> => {
+    try {
+      const address = await Location.reverseGeocodeAsync(loc);
+      if (!address.length) return fallbackLabel;
+
+      const place = address[0];
+      const parts = [place.district, place.city].filter(Boolean);
+
+      return parts.length > 0 ? parts.join(", ") : fallbackLabel;
+    } catch {
+      return fallbackLabel;
+    }
+  };
+
+  const handleSetLocationFromSearch = async () => {
+    const query = locationSearchQuery.trim();
+    if (!query) {
+      Alert.alert("Missing location", "Enter a place to search first.");
+      return;
+    }
+
+    setSettingLocation(true);
+    try {
+      if (locationSuggestions.length > 0) {
+        await applySelectedLocation(locationSuggestions[0]);
+      } else {
+        const geocoded = await Location.geocodeAsync(query);
+        if (!geocoded.length) {
+          Alert.alert("Location not found", "Try a more specific place name.");
+          return;
+        }
+
+        await applySelectedLocation({
+          label: query,
+          latitude: geocoded[0].latitude,
+          longitude: geocoded[0].longitude,
+        });
+      }
+    } catch (error) {
+      console.error("Error setting searched location:", error);
+      Alert.alert("Unable to set location", "Please try again in a moment.");
+    } finally {
+      setSettingLocation(false);
+    }
+  };
+
+  const handleUseCurrentLocation = async () => {
+    setSettingLocation(true);
+    try {
+      const currentLocation = await getCurrentLocation();
+      const label = await resolveLocationLabel(
+        currentLocation,
+        "Current location",
+      );
+
+      setLocation(label);
+      setUserLocation(currentLocation);
+      await savePreferredLocation({ ...currentLocation, label });
+      await persistRecent({ ...currentLocation, label });
+      await loadBagsByLocation(currentLocation);
+      setLocationSearchQuery(label);
+      setLocationSuggestions([]);
+    } catch (error) {
+      console.error("Error refreshing current location:", error);
+      Alert.alert(
+        "Unable to refresh location",
+        "Please try again in a moment.",
+      );
+    } finally {
+      setSettingLocation(false);
+    }
+  };
+
+  // 🔹 FILTER SEARCH
+  useEffect(() => {
     if (!searchQuery.trim()) {
       setFilteredBags(bags);
       return;
@@ -78,19 +482,13 @@ export default function BuyerHome() {
         bag.sellerName.toLowerCase().includes(searchQuery.toLowerCase()),
     );
     setFilteredBags(filtered);
-  };
+  }, [bags, searchQuery]);
 
-  const calculateDiscount = (original: number, discounted: number) => {
-    return Math.round(((original - discounted) / original) * 100);
-  };
+  const calculateDiscount = (original: number, discounted: number) =>
+    Math.round(((original - discounted) / original) * 100);
 
-  const formatTime = (timeString: string) => {
-    return timeString || "N/A";
-  };
-
-  const getLeftCount = (item: AvailableBag) => {
-    return item.quantity - (item.sold || 0);
-  };
+  const formatTime = (timeString: string) => timeString || "N/A";
+  const getLeftCount = (item: AvailableBag) => item.quantity - (item.sold || 0);
 
   if (loading) {
     return (
@@ -108,17 +506,137 @@ export default function BuyerHome() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerLeft}>
           <Text style={styles.locationLabel}>Location</Text>
-          <View style={styles.locationRow}>
-            <MapPin size={20} color={colors.white} />
-            <Text style={styles.locationText}>{location}</Text>
-          </View>
+          {!headerSearchActive ? (
+            <TouchableOpacity
+              style={styles.locationRow}
+              onPress={() => setHeaderSearchActive(true)}
+            >
+              <MapPin size={20} color={colors.white} />
+              <Text
+                style={styles.locationText}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {location}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.headerLocationInputRow}>
+              <MapPin size={18} color={colors.white} />
+              <TextInput
+                style={styles.headerLocationInput}
+                placeholder="Search location..."
+                value={locationSearchQuery}
+                onChangeText={setLocationSearchQuery}
+                placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                autoFocus
+              />
+              {locationSearchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setLocationSearchQuery("");
+                    setLocationSuggestions([]);
+                  }}
+                >
+                  <X size={16} color={colors.white} />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
         </View>
         <TouchableOpacity style={styles.profileButton}>
           <User size={24} color={colors.white} />
         </TouchableOpacity>
       </View>
+
+      {/* Location Suggestions Dropdown */}
+      {headerSearchActive && (
+        <View style={styles.headerSuggestionsContainer}>
+          {recentLocations.length > 0 &&
+            locationSearchQuery.trim().length < 3 && (
+              <View style={styles.headerRecentSection}>
+                <Text style={styles.headerRecentTitle}>Recent</Text>
+                {recentLocations.map((recent, index) => (
+                  <TouchableOpacity
+                    key={`${recent.label}-${index}`}
+                    style={styles.headerSuggestionItem}
+                    onPress={() => {
+                      applySelectedLocation(recent);
+                      setHeaderSearchActive(false);
+                    }}
+                    disabled={settingLocation}
+                  >
+                    <MapPin size={14} color={colors.textSoft} />
+                    <Text
+                      style={styles.headerSuggestionText}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {recent.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+          {searchingLocation ? (
+            <Text style={styles.headerLocationHint}>Searching...</Text>
+          ) : locationSuggestions.length > 0 ? (
+            <View>
+              {locationSuggestions.map((suggestion, index) => (
+                <TouchableOpacity
+                  key={`${suggestion.label}-${index}`}
+                  style={styles.headerSuggestionItem}
+                  onPress={() => {
+                    applySelectedLocation(suggestion);
+                    setHeaderSearchActive(false);
+                  }}
+                  disabled={settingLocation}
+                >
+                  <MapPin size={14} color={colors.textSoft} />
+                  <Text
+                    style={styles.headerSuggestionText}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {suggestion.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
+
+          {!searchingLocation &&
+            locationSearchQuery.trim().length > 0 &&
+            locationSuggestions.length === 0 && (
+              <TouchableOpacity
+                style={styles.headerSuggestionItem}
+                onPress={() => {
+                  handleSetLocationFromSearch();
+                  setHeaderSearchActive(false);
+                }}
+              >
+                <Search size={14} color={colors.textSoft} />
+                <Text style={styles.headerSuggestionText}>
+                  Search &quot;{locationSearchQuery}&quot;
+                </Text>
+              </TouchableOpacity>
+            )}
+
+          <TouchableOpacity
+            style={styles.headerCloseButton}
+            onPress={() => {
+              setHeaderSearchActive(false);
+              setLocationSearchQuery("");
+              setLocationSuggestions([]);
+            }}
+          >
+            <Text style={styles.headerCloseText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Search */}
@@ -176,10 +694,37 @@ export default function BuyerHome() {
                 bag.originalPrice || bag.price,
                 bag.discountedPrice || bag.price,
               );
+              const lat = Number(bag.latitude);
+              const lng = Number(bag.longitude);
+              const computedDistance =
+                Number.isFinite(lat) && Number.isFinite(lng)
+                  ? getDistanceKm(
+                      userLocation.latitude,
+                      userLocation.longitude,
+                      lat,
+                      lng,
+                    )
+                  : bag.distance;
 
               return (
-                <TouchableOpacity key={bag.id || index} style={styles.bagCard}>
-                  {/* Image */}
+                <TouchableOpacity
+                  key={bag.id || index}
+                  style={styles.bagCard}
+                  onPress={() => {
+                    // Route to appropriate detail page based on type
+                    if (bag.type === "bag") {
+                      router.push({
+                        pathname: "/(buyer)/mysterydetail/[id]",
+                        params: { id: bag.id },
+                      } as any);
+                    } else {
+                      router.push({
+                        pathname: "/(buyer)/itemdetail/[id]",
+                        params: { id: bag.id },
+                      } as any);
+                    }
+                  }}
+                >
                   <View style={styles.bagImageContainer}>
                     {bag.imageUrl ? (
                       <Image
@@ -201,9 +746,9 @@ export default function BuyerHome() {
                     )}
                   </View>
 
-                  {/* Info */}
                   <View style={styles.bagInfo}>
-                    <Text style={styles.bagName}>{bag.sellerName}</Text>
+                    <Text style={styles.bagName}>{bag.name}</Text>
+                    <Text style={styles.shopName}>{bag.sellerName}</Text>
 
                     <View style={styles.bagMeta}>
                       <Star size={14} color="#FFC107" fill="#FFC107" />
@@ -213,7 +758,7 @@ export default function BuyerHome() {
                       <Text style={styles.metaDot}>•</Text>
                       <MapPin size={14} color={colors.textSoft} />
                       <Text style={styles.distanceText}>
-                        {bag.distance.toFixed(1)} km
+                        {computedDistance.toFixed(1)} km
                       </Text>
                     </View>
 
@@ -233,7 +778,7 @@ export default function BuyerHome() {
                           bag.originalPrice >
                             (bag.discountedPrice || bag.price) && (
                             <Text style={styles.originalPrice}>
-                              ${bag.originalPrice.toFixed(2)}
+                              RM {bag.originalPrice.toFixed(2)}
                             </Text>
                           )}
                       </View>
@@ -256,8 +801,8 @@ export default function BuyerHome() {
           <View style={styles.impactContent}>
             <Text style={styles.impactTitle}>Your Impact This Month</Text>
             <Text style={styles.impactText}>
-              You've saved {stats?.bagsSaved || 0} meals from going to waste and
-              prevented {stats?.co2Saved || 0}kg of CO₂ emissions!
+              You&apos;ve saved {stats?.bagsSaved || 0} meals from going to
+              waste and prevented {stats?.co2Saved || 0}kg of CO₂ emissions!
             </Text>
             <TouchableOpacity style={styles.detailsButton}>
               <Text style={styles.detailsButtonText}>View Details</Text>
@@ -272,10 +817,7 @@ export default function BuyerHome() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
   header: {
     backgroundColor: colors.primary,
     paddingHorizontal: spacing.lg,
@@ -283,6 +825,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+  },
+  headerLeft: {
+    flex: 1,
+    marginRight: spacing.md,
   },
   locationLabel: {
     fontSize: 12,
@@ -293,11 +839,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    minWidth: 0,
   },
   locationText: {
     fontSize: 18,
     fontWeight: "600",
     color: colors.white,
+    flex: 1,
+    minWidth: 0,
   },
   profileButton: {
     width: 44,
@@ -306,6 +855,180 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.2)",
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
+  },
+  headerLocationInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  headerLocationInput: {
+    flex: 1,
+    fontSize: 16,
+    color: colors.white,
+  },
+  headerSuggestionsContainer: {
+    backgroundColor: colors.white,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    maxHeight: 300,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  headerRecentSection: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  headerRecentTitle: {
+    fontSize: 11,
+    color: colors.textSoft,
+    fontWeight: "600",
+    marginBottom: spacing.xs,
+  },
+  headerSuggestionItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  headerSuggestionText: {
+    fontSize: 14,
+    color: colors.text,
+    flex: 1,
+  },
+  headerLocationHint: {
+    fontSize: 13,
+    color: colors.textSoft,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  headerCloseButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  headerCloseText: {
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+  locationAdjustCard: {
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  quickCitiesRow: {
+    gap: spacing.sm,
+    paddingBottom: 2,
+  },
+  quickCityChip: {
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    backgroundColor: colors.white,
+  },
+  quickCityText: {
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  locationInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  locationInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.text,
+  },
+  clearInputButton: {
+    padding: 4,
+  },
+  recentSection: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  recentTitle: {
+    fontSize: 12,
+    color: colors.textSoft,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.background,
+  },
+  locationActionRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  locationHint: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: 2,
+  },
+  suggestionsList: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    overflow: "hidden",
+  },
+  suggestionItem: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  suggestionText: {
+    fontSize: 13,
+    color: colors.text,
+  },
+  locationActionButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  locationActionText: {
+    color: colors.white,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  locationGhostButton: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  locationGhostText: {
+    color: colors.primary,
+    fontSize: 13,
+    fontWeight: "600",
   },
   searchContainer: {
     flexDirection: "row",
@@ -318,14 +1041,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  searchIcon: {
-    marginRight: spacing.sm,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: colors.text,
-  },
+  searchIcon: { marginRight: spacing.sm },
+  searchInput: { flex: 1, fontSize: 15, color: colors.text },
   statsCard: {
     backgroundColor: colors.success,
     borderRadius: 16,
@@ -335,43 +1052,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-around",
   },
-  statItem: {
-    alignItems: "center",
-  },
+  statItem: { alignItems: "center" },
   statNumber: {
     fontSize: 32,
     fontWeight: "700",
     color: colors.white,
     marginBottom: 4,
   },
-  statLabel: {
-    fontSize: 12,
-    color: "rgba(255, 255, 255, 0.9)",
-  },
-  statDivider: {
-    width: 1,
-    backgroundColor: "rgba(255, 255, 255, 0.3)",
-  },
-  section: {
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-  },
+  statLabel: { fontSize: 12, color: "rgba(255, 255, 255, 0.9)" },
+  statDivider: { width: 1, backgroundColor: "rgba(255, 255, 255, 0.3)" },
+  section: { paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: spacing.md,
   },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: "600",
-    color: colors.text,
-  },
-  viewAllText: {
-    fontSize: 14,
-    color: colors.primary,
-    fontWeight: "500",
-  },
+  sectionTitle: { fontSize: 20, fontWeight: "600", color: colors.text },
+  viewAllText: { fontSize: 14, color: colors.primary, fontWeight: "500" },
   bagCard: {
     backgroundColor: colors.white,
     borderRadius: 12,
@@ -381,15 +1079,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     flexDirection: "row",
   },
-  bagImageContainer: {
-    width: 120,
-    height: 140,
-    position: "relative",
-  },
-  bagImage: {
-    width: "100%",
-    height: "100%",
-  },
+  bagImageContainer: { width: 120, height: 140, position: "relative" },
+  bagImage: { width: "100%", height: "100%" },
   bagImagePlaceholder: {
     width: "100%",
     height: "100%",
@@ -414,20 +1105,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
   },
-  discountText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.white,
-  },
-  bagInfo: {
-    flex: 1,
-    padding: spacing.md,
-    justifyContent: "space-between",
-  },
+  discountText: { fontSize: 12, fontWeight: "600", color: colors.white },
+  bagInfo: { flex: 1, padding: spacing.md, justifyContent: "space-between" },
   bagName: {
     fontSize: 16,
     fontWeight: "600",
     color: colors.text,
+    marginBottom: 2,
+  },
+  shopName: {
+    fontSize: 13,
+    color: colors.textSoft,
     marginBottom: 6,
   },
   bagMeta: {
@@ -436,39 +1124,22 @@ const styles = StyleSheet.create({
     gap: 4,
     marginBottom: 6,
   },
-  ratingText: {
-    fontSize: 13,
-    color: colors.text,
-    fontWeight: "500",
-  },
-  metaDot: {
-    fontSize: 13,
-    color: colors.textSoft,
-  },
-  distanceText: {
-    fontSize: 13,
-    color: colors.textSoft,
-  },
+  ratingText: { fontSize: 13, color: colors.text, fontWeight: "500" },
+  metaDot: { fontSize: 13, color: colors.textSoft },
+  distanceText: { fontSize: 13, color: colors.textSoft },
   bagTime: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     marginBottom: 12,
   },
-  timeText: {
-    fontSize: 13,
-    color: colors.textSoft,
-  },
+  timeText: { fontSize: 13, color: colors.textSoft },
   bagFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-end",
   },
-  price: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.primary,
-  },
+  price: { fontSize: 20, fontWeight: "700", color: colors.primary },
   originalPrice: {
     fontSize: 13,
     color: colors.textSoft,
@@ -482,11 +1153,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.error,
   },
-  leftText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.error,
-  },
+  leftText: { fontSize: 12, fontWeight: "600", color: colors.error },
   impactCard: {
     backgroundColor: colors.successSoft,
     borderRadius: 16,
@@ -504,17 +1171,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  impactEmoji: {
-    fontSize: 28,
-  },
-  impactContent: {
-    flex: 1,
-  },
+  impactEmoji: { fontSize: 28 },
+  impactContent: { flex: 1 },
   impactTitle: {
     fontSize: 16,
     fontWeight: "600",
-    color: colors.text,
     marginBottom: 6,
+    color: colors.text,
   },
   impactText: {
     fontSize: 13,
@@ -529,23 +1192,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderRadius: 8,
   },
-  detailsButtonText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: colors.text,
-  },
-  emptyState: {
-    alignItems: "center",
-    paddingVertical: spacing.xl * 2,
-  },
+  detailsButtonText: { fontSize: 13, fontWeight: "600", color: colors.text },
+  emptyState: { alignItems: "center", paddingVertical: spacing.xl * 2 },
   emptyText: {
     fontSize: 16,
     fontWeight: "500",
     color: colors.text,
     marginBottom: 4,
   },
-  emptySubtext: {
-    fontSize: 14,
-    color: colors.textSoft,
-  },
+  emptySubtext: { fontSize: 14, color: colors.textSoft },
 });

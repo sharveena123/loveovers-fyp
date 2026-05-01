@@ -91,6 +91,9 @@ export default function OwnerDashboard() {
   const fetchDashboardData = async (sellerId: string) => {
     setLoading(true);
     try {
+      // Update item statuses first to mark expired items
+      await inventoryService.updateItemStatuses(sellerId);
+
       const [dashStats, items, weeklyData] = await Promise.all([
         getDashboardStats(sellerId),
         inventoryService.getInventory(sellerId),
@@ -172,7 +175,7 @@ export default function OwnerDashboard() {
             <Text style={styles.statValue}>
               RM {stats.todayRevenue.toLocaleString()}
             </Text>
-            <Text style={styles.statLabel}>Today's Revenue</Text>
+            <Text style={styles.statLabel}>Today&apos;s Revenue</Text>
             <Text style={[styles.statChange, { color: colors.success }]}>
               ↗ +{stats.revenueChange.toFixed(1)}%
             </Text>
