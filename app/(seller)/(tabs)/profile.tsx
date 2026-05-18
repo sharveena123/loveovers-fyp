@@ -7,13 +7,14 @@ import {
   updateSellerSettings,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import {
   AlertCircle,
   BarChart3,
   Bell,
   ChevronRight,
+  Clock,
   CreditCard,
   Edit2,
   HelpCircle,
@@ -21,14 +22,17 @@ import {
   LogOut,
   Mail,
   MapPin,
+  Package,
   Phone,
   Settings,
   Star,
+  Store,
 } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -37,16 +41,82 @@ import {
   View,
 } from "react-native";
 
+function MenuRow({
+  icon,
+  iconBg,
+  title,
+  subtitle,
+  onPress,
+  rightElement,
+  showChevron = true,
+}: {
+  icon: React.ReactNode;
+  iconBg: string;
+  title: string;
+  subtitle?: string;
+  onPress?: () => void;
+  rightElement?: React.ReactNode;
+  showChevron?: boolean;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.menuRow}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.85 : 1}
+      disabled={!onPress && !rightElement}
+    >
+      <View style={styles.menuRowLeft}>
+        <View style={[styles.menuIconWrap, { backgroundColor: iconBg }]}>
+          {icon}
+        </View>
+        <View style={styles.menuTextWrap}>
+          <Text style={styles.menuTitle}>{title}</Text>
+          {subtitle ? <Text style={styles.menuSubtitle}>{subtitle}</Text> : null}
+        </View>
+      </View>
+      <View style={styles.menuRowRight}>
+        {rightElement}
+        {showChevron && onPress ? (
+          <ChevronRight size={20} color={colors.textSoft} />
+        ) : null}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function StatPill({
+  icon,
+  iconBg,
+  value,
+  label,
+  valueColor,
+  accentColor,
+}: {
+  icon: React.ReactNode;
+  iconBg: string;
+  value: string;
+  label: string;
+  valueColor?: string;
+  accentColor: string;
+}) {
+  return (
+    <View style={[styles.statPill, { borderTopColor: accentColor }]}>
+      <View style={[styles.statPillIcon, { backgroundColor: iconBg }]}>{icon}</View>
+      <Text style={[styles.statPillValue, valueColor ? { color: valueColor } : null]}>
+        {value}
+      </Text>
+      <Text style={styles.statPillLabel}>{label}</Text>
+    </View>
+  );
+}
+
 export default function ProfileScreen() {
   const [profile, setProfile] = useState<SellerProfile | null>(null);
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
-
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     const user = auth.currentUser;
     if (!user) {
       router.replace("/(auth)/login");
@@ -68,7 +138,19 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [loadProfile]),
+  );
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadProfile();
+    setRefreshing(false);
+  }, [loadProfile]);
 
   const handleToggleSetting = async (
     setting: "notifications" | "lowStockAlerts",
@@ -123,294 +205,285 @@ export default function ProfileScreen() {
   if (loading || !profile || !stats) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator
-          size="large"
-          color={colors.primary}
-          style={styles.loader}
-        />
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading profile…</Text>
+        </View>
       </SafeAreaView>
     );
   }
 
+  const hours = [
+    { day: "Mon – Fri", time: profile.operatingHours?.monday || "7:00 AM – 8:00 PM" },
+    { day: "Saturday", time: profile.operatingHours?.saturday || "8:00 AM – 9:00 PM" },
+    { day: "Sunday", time: profile.operatingHours?.sunday || "9:00 AM – 6:00 PM" },
+  ];
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Business Profile</Text>
-        <Text style={styles.headerSubtitle}>Manage your cafe settings</Text>
-      </View>
-
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
+          />
+        }
       >
-        {/* Business Card */}
-        <View style={styles.businessCard}>
-          <View style={styles.businessHeader}>
-            <View style={styles.avatarContainer}>
-              <Text style={styles.avatarText}>
-                {profile.businessName.charAt(0).toUpperCase()}
-              </Text>
-              {/* <View style={styles.verifiedBadge}>
-                <Text style={styles.verifiedIcon}>✓</Text>
-              </View> */}
-            </View>
-            <View style={styles.businessInfo}>
-              <Text style={styles.businessName}>{profile.businessName}</Text>
-              {/* <View style={styles.tierBadge}>
-                <Text style={styles.tierText}>{profile.tier}</Text>
-              </View> */}
-              <View style={styles.infoRow}>
-                <MapPin size={14} color={colors.textSoft} />
-                <Text style={styles.infoText}>{profile.businessAddress}</Text>
-              </View>
-              <View style={styles.infoRow}>
-                <Phone size={14} color={colors.textSoft} />
-                <Text style={styles.infoText}>{profile.phone}</Text>
-              </View>
-              <View style={styles.infoRow}>
-                <Mail size={14} color={colors.textSoft} />
-                <Text style={styles.infoText}>{profile.email}</Text>
-              </View>
-            </View>
-            <TouchableOpacity
-              style={styles.editButton}
-              onPress={() => router.push("/(seller)/sellereditprofile")}
-            >
-              <Edit2 size={18} color={colors.primary} />
-            </TouchableOpacity>
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={styles.headerDecor} />
+          <View style={styles.headerContent}>
+            <Text style={styles.headerTitle}>Profile</Text>
+            <Text style={styles.headerSubtitle}>Manage your business</Text>
           </View>
         </View>
 
-        {/* Operating Hours */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Operating Hours</Text>
-            <TouchableOpacity>
-              <Text style={styles.editLink}>Edit</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.hoursCard}>
-            <View style={styles.hourRow}>
-              <Text style={styles.dayText}>Monday - Friday</Text>
-              <Text style={styles.hourText}>
-                {profile.operatingHours?.monday || "7:00 AM - 8:00 PM"}
-              </Text>
-            </View>
-            <View style={styles.hourRow}>
-              <Text style={styles.dayText}>Saturday</Text>
-              <Text style={styles.hourText}>
-                {profile.operatingHours?.saturday || "8:00 AM - 9:00 PM"}
-              </Text>
-            </View>
-            <View style={styles.hourRow}>
-              <Text style={styles.dayText}>Sunday</Text>
-              <Text style={styles.hourText}>
-                {profile.operatingHours?.sunday || "9:00 AM - 6:00 PM"}
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Performance Stats */}
-        <View style={styles.statsGrid}>
-          <View style={styles.miniStatCard}>
-            <Text style={styles.statValue}>{stats.totalSales}</Text>
-            <Text style={styles.statLabel}>Total Sales</Text>
-          </View>
-          <View style={styles.miniStatCard}>
-            <Text style={[styles.statValue, { color: colors.primary }]}>
-              {stats.rating}
-            </Text>
-            <Text style={styles.statLabel}>Rating</Text>
-          </View>
-          <View style={styles.miniStatCard}>
-            <Text style={[styles.statValue, { color: colors.success }]}>
-              {stats.savedPercentage}%
-            </Text>
-            <Text style={styles.statLabel}>Saved</Text>
-          </View>
-        </View>
-
-        {/* Settings */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Settings</Text>
-          <View style={styles.settingsCard}>
-            <View style={styles.settingRow}>
-              <View style={styles.settingLeft}>
-                <View
-                  style={[styles.settingIcon, { backgroundColor: "#FFF5E6" }]}
-                >
-                  <Bell size={20} color={colors.primary} />
-                </View>
-                <View>
-                  <Text style={styles.settingTitle}>Notifications</Text>
-                  <Text style={styles.settingSubtitle}>
-                    Order alerts and updates
+        <View style={styles.body}>
+          {/* Business card */}
+          <View style={styles.businessCard}>
+            <View style={styles.businessCardTop}>
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>
+                  {profile.businessName.charAt(0).toUpperCase()}
+                </Text>
+              </View>
+              <View style={styles.businessMeta}>
+                <View style={styles.businessNameRow}>
+                  <Text style={styles.businessName} numberOfLines={1}>
+                    {profile.businessName}
                   </Text>
+                  <TouchableOpacity
+                    style={styles.editBtn}
+                    onPress={() => router.push("/(seller)/sellereditprofile")}
+                  >
+                    <Edit2 size={16} color={colors.primary} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.storeBadge}>
+                  <Store size={12} color={colors.primary} />
+                  <Text style={styles.storeBadgeText}>Seller account</Text>
                 </View>
               </View>
-              <Switch
-                value={profile.settings?.notifications ?? true}
-                onValueChange={() => handleToggleSetting("notifications")}
-                trackColor={{ false: "#E5E5E5", true: colors.primary }}
-                thumbColor="#fff"
+            </View>
+
+            <View style={styles.contactList}>
+              <View style={styles.contactRow}>
+                <MapPin size={15} color={colors.primary} />
+                <Text style={styles.contactText} numberOfLines={2}>
+                  {profile.businessAddress || "No address set"}
+                </Text>
+              </View>
+              <View style={styles.contactRow}>
+                <Phone size={15} color={colors.primary} />
+                <Text style={styles.contactText}>{profile.phone}</Text>
+              </View>
+              <View style={styles.contactRow}>
+                <Mail size={15} color={colors.primary} />
+                <Text style={styles.contactText}>{profile.email}</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Performance stats */}
+          <Text style={styles.sectionLabel}>Performance</Text>
+          <View style={styles.statsRow}>
+            <StatPill
+              icon={<Package size={18} color={colors.primary} />}
+              iconBg={colors.primarySoft}
+              value={String(stats.totalSales)}
+              label="Total sales"
+              accentColor={colors.primary}
+            />
+            <StatPill
+              icon={<Star size={18} color="#c4a574" />}
+              iconBg="#f5f0e8"
+              value={stats.rating.toFixed(1)}
+              label="Rating"
+              valueColor={colors.primary}
+              accentColor="#c4a574"
+            />
+            <StatPill
+              icon={<Leaf size={18} color={colors.success} />}
+              iconBg={colors.successSoft}
+              value={`${stats.savedPercentage}%`}
+              label="Saved"
+              valueColor={colors.success}
+              accentColor={colors.success}
+            />
+          </View>
+
+          {/* Operating hours */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Operating hours</Text>
+              <TouchableOpacity
+                onPress={() => router.push("/(seller)/sellereditprofile")}
+              >
+                <Text style={styles.editLink}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.card}>
+              {hours.map((row, i) => (
+                <View
+                  key={row.day}
+                  style={[
+                    styles.hourRow,
+                    i < hours.length - 1 && styles.hourRowBorder,
+                  ]}
+                >
+                  <View style={styles.hourDayWrap}>
+                    <Clock size={14} color={colors.textSoft} />
+                    <Text style={styles.dayText}>{row.day}</Text>
+                  </View>
+                  <Text style={styles.hourText}>{row.time}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {/* Settings */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Settings</Text>
+            <View style={styles.card}>
+              <MenuRow
+                icon={<Bell size={20} color={colors.primary} />}
+                iconBg={colors.primarySoft}
+                title="Notifications"
+                subtitle="Order alerts and updates"
+                showChevron={false}
+                rightElement={
+                  <Switch
+                    value={profile.settings?.notifications ?? true}
+                    onValueChange={() => handleToggleSetting("notifications")}
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                    thumbColor="#fff"
+                  />
+                }
+              />
+              <View style={styles.divider} />
+              <MenuRow
+                icon={<AlertCircle size={20} color={colors.primary} />}
+                iconBg={colors.primarySoft}
+                title="Low stock alerts"
+                subtitle="When inventory is running low"
+                showChevron={false}
+                rightElement={
+                  <Switch
+                    value={profile.settings?.lowStockAlerts ?? true}
+                    onValueChange={() => handleToggleSetting("lowStockAlerts")}
+                    trackColor={{ false: colors.border, true: colors.primary }}
+                    thumbColor="#fff"
+                  />
+                }
+              />
+              <View style={styles.divider} />
+              <MenuRow
+                icon={<CreditCard size={20} color="#666" />}
+                iconBg="#f0f0f0"
+                title="Payment settings"
+                subtitle="Manage payout methods"
+                onPress={() =>
+                  Alert.alert("Coming soon", "Payment settings will be available soon.")
+                }
+              />
+              <View style={styles.divider} />
+              <MenuRow
+                icon={<BarChart3 size={20} color={colors.primary} />}
+                iconBg={colors.primarySoft}
+                title="Business analytics"
+                subtitle="Reports and insights"
+                onPress={() => router.push("/(seller)/analytics")}
               />
             </View>
+          </View>
 
-            <View style={styles.settingRow}>
-              <View style={styles.settingLeft}>
-                <View
-                  style={[styles.settingIcon, { backgroundColor: "#FFF5E6" }]}
-                >
-                  <AlertCircle size={20} color={colors.primary} />
-                </View>
-                <View>
-                  <Text style={styles.settingTitle}>Low Stock Alerts</Text>
-                  <Text style={styles.settingSubtitle}>
-                    Get notified when inventory is low
-                  </Text>
-                </View>
-              </View>
-              <Switch
-                value={profile.settings?.lowStockAlerts ?? true}
-                onValueChange={() => handleToggleSetting("lowStockAlerts")}
-                trackColor={{ false: "#E5E5E5", true: colors.primary }}
-                thumbColor="#fff"
+          {/* Account */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Account</Text>
+            <View style={styles.card}>
+              <MenuRow
+                icon={<Settings size={20} color="#666" />}
+                iconBg="#f0f0f0"
+                title="Account settings"
+                onPress={() => router.push("/(seller)/sellereditprofile")}
+              />
+              <View style={styles.divider} />
+              <MenuRow
+                icon={<HelpCircle size={20} color={colors.primary} />}
+                iconBg={colors.primarySoft}
+                title="Help & support"
+                onPress={() => router.push("/(seller)/support")}
+              />
+              <View style={styles.divider} />
+              <MenuRow
+                icon={<Star size={20} color={colors.success} />}
+                iconBg={colors.successSoft}
+                title="Subscription plan"
+                showChevron={false}
+                rightElement={
+                  <View style={styles.premiumBadge}>
+                    <Text style={styles.premiumText}>Premium</Text>
+                  </View>
+                }
               />
             </View>
-
-            <TouchableOpacity style={styles.settingRowClickable}>
-              <View style={styles.settingLeft}>
-                <View
-                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
-                >
-                  <CreditCard size={20} color="#666" />
-                </View>
-                <View>
-                  <Text style={styles.settingTitle}>Payment Settings</Text>
-                  <Text style={styles.settingSubtitle}>
-                    Manage payout methods
-                  </Text>
-                </View>
-              </View>
-              <ChevronRight size={20} color={colors.textSoft} />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.settingRowClickable}>
-              <View style={styles.settingLeft}>
-                <View
-                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
-                >
-                  <BarChart3 size={20} color="#666" />
-                </View>
-                <View>
-                  <Text style={styles.settingTitle}>Business Analytics</Text>
-                  <Text style={styles.settingSubtitle}>
-                    Detailed reports and insights
-                  </Text>
-                </View>
-              </View>
-              <ChevronRight size={20} color={colors.textSoft} />
-            </TouchableOpacity>
           </View>
+
+          {/* Impact */}
+          <View style={styles.impactCard}>
+            <View style={styles.impactHeader}>
+              <View style={styles.impactIconWrap}>
+                <Leaf size={22} color={colors.success} />
+              </View>
+              <View>
+                <Text style={styles.impactTitle}>Your impact</Text>
+                <Text style={styles.impactSubtitle}>
+                  The difference you&apos;re making
+                </Text>
+              </View>
+            </View>
+            <View style={styles.impactGrid}>
+              <View style={styles.impactItem}>
+                <Text style={styles.impactValue}>
+                  {stats.mealsSaved.toLocaleString()}
+                </Text>
+                <Text style={styles.impactLabel}>Meals saved</Text>
+              </View>
+              <View style={styles.impactItem}>
+                <Text style={styles.impactValue}>{stats.co2Reduced}T</Text>
+                <Text style={styles.impactLabel}>CO₂ reduced</Text>
+              </View>
+              <View style={styles.impactItem}>
+                <Text style={styles.impactValue}>
+                  RM {(stats.revenueSaved / 1000).toFixed(1)}K
+                </Text>
+                <Text style={styles.impactLabel}>Revenue saved</Text>
+              </View>
+              <View style={styles.impactItem}>
+                <Text style={[styles.impactValue, { color: colors.success }]}>
+                  {stats.wasteDown}%
+                </Text>
+                <Text style={styles.impactLabel}>Waste down</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Logout */}
+          <TouchableOpacity
+            style={styles.logoutButton}
+            onPress={handleLogout}
+            activeOpacity={0.88}
+          >
+            <LogOut size={20} color={colors.error} />
+            <Text style={styles.logoutText}>Log out</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.footer}>Version 1.0.0 · © 2026 LoveOvers</Text>
         </View>
 
-        {/* Account */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
-          <View style={styles.settingsCard}>
-            <TouchableOpacity style={styles.settingRowClickable}>
-              <View style={styles.settingLeft}>
-                <View
-                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
-                >
-                  <Settings size={20} color="#666" />
-                </View>
-                <Text style={styles.settingTitle}>Account Settings</Text>
-              </View>
-              <ChevronRight size={20} color={colors.textSoft} />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.settingRowClickable}>
-              <View style={styles.settingLeft}>
-                <View
-                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
-                >
-                  <HelpCircle size={20} color="#666" />
-                </View>
-                <Text style={styles.settingTitle}>Help & Support</Text>
-              </View>
-              <ChevronRight size={20} color={colors.textSoft} />
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.settingRowClickable}>
-              <View style={styles.settingLeft}>
-                <View
-                  style={[styles.settingIcon, { backgroundColor: "#E7F1E5" }]}
-                >
-                  <Star size={20} color={colors.success} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.settingTitle}>Subscription Plan</Text>
-                </View>
-              </View>
-              <View style={styles.premiumBadge}>
-                <Text style={styles.premiumText}>Premium</Text>
-              </View>
-              <ChevronRight size={20} color={colors.textSoft} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Your Impact */}
-        <View style={styles.impactSection}>
-          <View style={styles.impactHeader}>
-            <View style={styles.impactIconContainer}>
-              <Leaf size={24} color={colors.success} />
-            </View>
-            <View>
-              <Text style={styles.impactTitle}>Your Impact</Text>
-              <Text style={styles.impactSubtitle}>Making a difference</Text>
-            </View>
-          </View>
-
-          <View style={styles.impactGrid}>
-            <View style={styles.impactCard}>
-              <Text style={styles.impactValue}>
-                {stats.mealsSaved.toLocaleString()}
-              </Text>
-              <Text style={styles.impactLabel}>Meals Saved</Text>
-            </View>
-            <View style={styles.impactCard}>
-              <Text style={styles.impactValue}>{stats.co2Reduced}T</Text>
-              <Text style={styles.impactLabel}>CO₂ Reduced</Text>
-            </View>
-            <View style={styles.impactCard}>
-              <Text style={styles.impactValue}>
-                RM {(stats.revenueSaved / 1000).toFixed(1)}K
-              </Text>
-              <Text style={styles.impactLabel}>Revenue Saved</Text>
-            </View>
-            <View style={styles.impactCard}>
-              <Text style={[styles.impactValue, { color: colors.error }]}>
-                {stats.wasteDown}%
-              </Text>
-              <Text style={styles.impactLabel}>Waste Down</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <LogOut size={20} color={colors.error} />
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
-
-        {/* Footer */}
-        <Text style={styles.footer}>Version 1.0.0 • © 2026 Food Waste App</Text>
-
-        <View style={{ height: 50 }} />
+        <View style={{ height: 100 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -421,103 +494,190 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  loader: {
+  loadingWrap: {
     flex: 1,
     justifyContent: "center",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  loadingText: {
+    fontSize: 15,
+    color: colors.textSoft,
+    fontWeight: "500",
   },
   header: {
     backgroundColor: colors.primary,
-    padding: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl + 24,
+    paddingHorizontal: spacing.lg,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    overflow: "hidden",
+  },
+  headerDecor: {
+    position: "absolute",
+    top: -40,
+    right: -30,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  headerContent: {
+    zIndex: 1,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 26,
+    fontWeight: "800",
     color: colors.white,
+    letterSpacing: -0.5,
     marginBottom: 4,
   },
   headerSubtitle: {
     fontSize: 14,
-    color: "rgba(255, 255, 255, 0.9)",
+    color: "rgba(255,255,255,0.8)",
+    fontWeight: "500",
   },
-  scrollContent: {
-    padding: spacing.lg,
+  body: {
+    marginTop: -spacing.xl,
+    paddingHorizontal: spacing.lg,
   },
   businessCard: {
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 20,
     padding: spacing.lg,
     marginBottom: spacing.lg,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "rgba(106, 60, 0, 0.08)",
   },
-  businessHeader: {
+  businessCardTop: {
     flexDirection: "row",
+    alignItems: "center",
     gap: spacing.md,
+    marginBottom: spacing.md,
   },
-  avatarContainer: {
-    position: "relative",
+  avatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 18,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
   },
   avatarText: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
-    fontSize: 24,
-    fontWeight: "600",
+    fontSize: 28,
+    fontWeight: "800",
     color: colors.white,
-    textAlign: "center",
-    lineHeight: 56,
   },
-  verifiedBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: colors.success,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 2,
-    borderColor: colors.white,
-  },
-  verifiedIcon: {
-    color: colors.white,
-    fontSize: 12,
-    fontWeight: "bold",
-  },
-  businessInfo: {
+  businessMeta: {
     flex: 1,
+    minWidth: 0,
+  },
+  businessNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: 6,
   },
   businessName: {
-    fontSize: 18,
-    fontWeight: "600",
+    fontSize: 20,
+    fontWeight: "800",
     color: colors.text,
-    marginBottom: 4,
+    flex: 1,
+    letterSpacing: -0.3,
   },
-  tierBadge: {
+  editBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  storeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     alignSelf: "flex-start",
     backgroundColor: colors.primarySoft,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginBottom: spacing.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
   },
-  tierText: {
-    fontSize: 10,
+  storeBadgeText: {
+    fontSize: 12,
     fontWeight: "600",
     color: colors.primary,
   },
-  infoRow: {
+  contactList: {
+    gap: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  contactRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 4,
+    alignItems: "flex-start",
+    gap: spacing.sm,
   },
-  infoText: {
-    fontSize: 12,
+  contactText: {
+    flex: 1,
+    fontSize: 14,
     color: colors.textSoft,
+    lineHeight: 20,
   },
-  editButton: {
-    padding: 8,
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textSoft,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: spacing.sm,
+  },
+  statsRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  statPill: {
+    flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.md,
+    alignItems: "center",
+    borderTopWidth: 3,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.04)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  statPillIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 6,
+  },
+  statPillValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.text,
+    marginBottom: 2,
+  },
+  statPillLabel: {
+    fontSize: 11,
+    color: colors.textSoft,
+    fontWeight: "600",
+    textAlign: "center",
   },
   section: {
     marginBottom: spacing.lg,
@@ -530,28 +690,47 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.text,
+    letterSpacing: -0.2,
+    marginBottom: spacing.sm,
   },
   editLink: {
     fontSize: 14,
     color: colors.primary,
-    fontWeight: "500",
+    fontWeight: "600",
   },
-  hoursCard: {
+  card: {
     backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.05)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
   hourRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: spacing.sm,
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
+  },
+  hourRowBorder: {
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  hourDayWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   dayText: {
     fontSize: 14,
+    fontWeight: "600",
     color: colors.text,
   },
   hourText: {
@@ -559,133 +738,116 @@ const styles = StyleSheet.create({
     color: colors.textSoft,
     fontWeight: "500",
   },
-  statsGrid: {
+  menuRow: {
     flexDirection: "row",
-    gap: spacing.md,
-    marginBottom: spacing.lg,
-  },
-  miniStatCard: {
-    flex: 1,
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
     alignItems: "center",
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: colors.text,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 12,
-    color: colors.textSoft,
-  },
-  settingsCard: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    overflow: "hidden",
-  },
-  settingRow: {
-    flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
-    padding: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.md,
   },
-  settingRowClickable: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  settingLeft: {
+  menuRowLeft: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
     gap: spacing.md,
   },
-  settingIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    justifyContent: "center",
+  menuIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
     alignItems: "center",
+    justifyContent: "center",
   },
-  settingTitle: {
+  menuTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  menuTitle: {
     fontSize: 15,
-    fontWeight: "500",
+    fontWeight: "600",
     color: colors.text,
   },
-  settingSubtitle: {
+  menuSubtitle: {
     fontSize: 12,
     color: colors.textSoft,
     marginTop: 2,
   },
+  menuRowRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginLeft: spacing.md + 42 + spacing.md,
+  },
   premiumBadge: {
     backgroundColor: colors.successSoft,
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
-    marginRight: spacing.sm,
   },
   premiumText: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.success,
   },
-  impactSection: {
-    backgroundColor: colors.backgroundSoft,
-    borderRadius: 12,
+  impactCard: {
+    backgroundColor: colors.successSoft,
+    borderRadius: 20,
     padding: spacing.lg,
     marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: "rgba(143, 151, 121, 0.25)",
   },
   impactHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: spacing.md,
     marginBottom: spacing.lg,
   },
-  impactIconContainer: {
+  impactIconWrap: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 14,
     backgroundColor: colors.white,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
   },
   impactTitle: {
     fontSize: 18,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.text,
   },
   impactSubtitle: {
     fontSize: 13,
     color: colors.textSoft,
+    marginTop: 2,
   },
   impactGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: spacing.md,
+    gap: spacing.sm,
   },
-  impactCard: {
+  impactItem: {
     width: "47%",
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 14,
     padding: spacing.md,
     alignItems: "center",
   },
   impactValue: {
-    fontSize: 28,
-    fontWeight: "700",
+    fontSize: 22,
+    fontWeight: "800",
     color: colors.text,
     marginBottom: 4,
   },
   impactLabel: {
     fontSize: 12,
     color: colors.textSoft,
+    fontWeight: "500",
+    textAlign: "center",
   },
   logoutButton: {
     flexDirection: "row",
@@ -693,21 +855,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: spacing.sm,
     backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: 16,
+    paddingVertical: 16,
+    borderWidth: 1.5,
+    borderColor: colors.errorSoft,
     marginBottom: spacing.md,
   },
   logoutText: {
-    fontSize: 15,
-    fontWeight: "600",
+    fontSize: 16,
+    fontWeight: "700",
     color: colors.error,
   },
   footer: {
     fontSize: 12,
     color: colors.textSoft,
     textAlign: "center",
-    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
   },
 });

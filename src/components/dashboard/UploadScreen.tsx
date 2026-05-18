@@ -1,12 +1,20 @@
+import { Text, TextInput } from "@/src/components/StyledText";
+import { colors, spacing } from "@/src/theme/styles";
 import * as DocumentPicker from "expo-document-picker";
+import {
+  Brain,
+  CheckCircle2,
+  ChevronRight,
+  FileSpreadsheet,
+  Sparkles,
+  Upload,
+  Zap,
+} from "lucide-react-native";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -17,10 +25,37 @@ interface UploadAndTrainScreenProps {
   onTrainingComplete?: (cafeId: string) => void;
 }
 
+const STEPS = [
+  { key: "upload", label: "Upload" },
+  { key: "review", label: "Review" },
+  { key: "done", label: "Done" },
+] as const;
+
+function getStepIndex(
+  step: "upload" | "assessing" | "review" | "training" | "done",
+): number {
+  if (step === "upload" || step === "assessing") return 0;
+  if (step === "review" || step === "training") return 1;
+  return 2;
+}
+
+function getConfidenceStyle(confidence: string) {
+  switch (confidence) {
+    case "high":
+      return { bg: colors.successSoft, text: colors.success, border: colors.success };
+    case "medium":
+      return { bg: "#fff5e6", text: "#b45309", border: "#f59e0b" };
+    default:
+      return { bg: colors.errorSoft, text: colors.error, border: colors.error };
+  }
+}
+
 export function UploadAndTrainScreen({
   onTrainingComplete,
 }: UploadAndTrainScreenProps) {
-  const [file, setFile] = useState<any>(null);
+  const [file, setFile] = useState<DocumentPicker.DocumentPickerAsset | null>(
+    null,
+  );
   const [cafeName, setCafeName] = useState("");
   const [assessment, setAssessment] = useState<DatasetAssessment | null>(null);
   const [trainingResult, setTrainingResult] = useState<TrainingResult | null>(
@@ -30,11 +65,11 @@ export function UploadAndTrainScreen({
   const [step, setStep] = useState<
     "upload" | "assessing" | "review" | "training" | "done"
   >("upload");
-
-  // User corrections (v4.2 — derived from editable_mapping)
   const [userCorrections, setUserCorrections] = useState<
     Record<string, string>
   >({});
+
+  const currentStepIndex = getStepIndex(step);
 
   const pickFile = async () => {
     const result = await DocumentPicker.getDocumentAsync({
@@ -68,13 +103,12 @@ export function UploadAndTrainScreen({
       setAssessment(result);
       setStep("review");
 
-      // v4.2: Initialize userCorrections from editable_mapping
       const initialCorrections: Record<string, string> = {};
       for (const entry of result.editable_mapping || []) {
         initialCorrections[entry.original_column] = entry.current_mapping;
       }
       setUserCorrections(initialCorrections);
-    } catch (error: any) {
+    } catch (error: unknown) {
       Alert.alert("Assessment Failed", String(error));
       setStep("upload");
     } finally {
@@ -83,10 +117,7 @@ export function UploadAndTrainScreen({
   };
 
   const handleMappingChange = (column: string, standard: string) => {
-    setUserCorrections((prev) => ({
-      ...prev,
-      [column]: standard,
-    }));
+    setUserCorrections((prev) => ({ ...prev, [column]: standard }));
   };
 
   const handleTrain = async () => {
@@ -94,7 +125,7 @@ export function UploadAndTrainScreen({
       Alert.alert("Cannot Train", "Please fix dataset issues first.");
       return;
     }
-    if (!assessment.assessment_id) {
+    if (!assessment.assessment_id || !file) {
       Alert.alert("Error", "No assessment ID found.");
       return;
     }
@@ -103,7 +134,6 @@ export function UploadAndTrainScreen({
       setLoading(true);
       setStep("training");
 
-      // v4.2 path only — always use assessment_id with Ollama backend
       const result = await trainModel(
         file.uri,
         file.name,
@@ -114,17 +144,14 @@ export function UploadAndTrainScreen({
       setTrainingResult(result);
       setStep("done");
 
-      Alert.alert(
-        "Training Complete! 🎉",
-        `Model trained for ${result.cafe_name}\n` +
-          `Items: ${result.items.length}\n` +
-          `Accuracy: ${(result.r2 * 100).toFixed(1)}%`,
-      );
+      // Switch to prediction UI first, then show success message
+      onTrainingComplete?.(result.cafe_id);
 
-      if (onTrainingComplete) {
-        onTrainingComplete(result.cafe_id);
-      }
-    } catch (error: any) {
+      Alert.alert(
+        "Training complete",
+        `Model trained for ${result.cafe_name}\nItems: ${result.items.length}\nAccuracy: ${(result.r2 * 100).toFixed(1)}%`,
+      );
+    } catch (error: unknown) {
       Alert.alert("Training Failed", String(error));
       setStep("review");
     } finally {
@@ -132,171 +159,191 @@ export function UploadAndTrainScreen({
     }
   };
 
-  const getConfidenceColor = (confidence: string) => {
-    switch (confidence) {
-      case "high":
-        return "#27AE60";
-      case "medium":
-        return "#F39C12";
-      case "low":
-        return "#E74C3C";
-      default:
-        return "#7F8C8D";
-    }
-  };
-
-  const getSourceIcon = (source: string) => {
-    switch (source) {
-      case "rule":
-        return "📋";
-      case "llm":
-        return "🤖";
-      case "unmapped":
-        return "❓";
-      default:
-        return "❓";
-    }
-  };
-
-  const getSourceLabel = (source: string) => {
-    switch (source) {
-      case "rule":
-        return "Rule-based";
-      case "llm":
-        return "AI (Ollama)";
-      case "unmapped":
-        return "Needs You";
-      default:
-        return "Unknown";
-    }
-  };
-
-  // v4.2: editable_mapping is always present from Ollama backend
   const editableMapping = assessment?.editable_mapping || [];
+  const confidenceStyle = assessment
+    ? getConfidenceStyle(assessment.confidence)
+    : null;
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>📤 Upload & Train AI Model</Text>
+    <View style={styles.wrapper}>
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerIconWrap}>
+          <Brain size={22} color={colors.primary} />
+        </View>
+        <View style={styles.headerText}>
+          <Text style={styles.title}>Train AI model</Text>
+          <Text style={styles.subtitle}>
+            Upload sales data — our AI maps columns automatically
+          </Text>
+        </View>
+      </View>
+
+      {/* Step indicator */}
+      <View style={styles.stepIndicator}>
+        {STEPS.map((s, i) => (
+          <React.Fragment key={s.key}>
+            <View style={styles.stepItem}>
+              <View
+                style={[
+                  styles.stepDot,
+                  i <= currentStepIndex && styles.stepDotActive,
+                ]}
+              >
+                {i < currentStepIndex ? (
+                  <CheckCircle2 size={14} color={colors.white} />
+                ) : (
+                  <Text
+                    style={[
+                      styles.stepDotText,
+                      i <= currentStepIndex && styles.stepDotTextActive,
+                    ]}
+                  >
+                    {i + 1}
+                  </Text>
+                )}
+              </View>
+              <Text
+                style={[
+                  styles.stepLabel,
+                  i <= currentStepIndex && styles.stepLabelActive,
+                ]}
+              >
+                {s.label}
+              </Text>
+            </View>
+            {i < STEPS.length - 1 && (
+              <View
+                style={[
+                  styles.stepLine,
+                  i < currentStepIndex && styles.stepLineActive,
+                ]}
+              />
+            )}
+          </React.Fragment>
+        ))}
+      </View>
 
       {/* Step 1: Upload */}
-      <View style={styles.stepBox}>
-        <Text style={styles.stepTitle}>Step 1: Select CSV File</Text>
-        <Text style={styles.stepDesc}>
-          Upload your sales data. Our AI handles any format.
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>1. Upload your data</Text>
+        <Text style={styles.cardDesc}>
+          Select a CSV file with your historical sales. Any column format works.
         </Text>
 
+        <Text style={styles.fieldLabel}>Cafe name (optional)</Text>
         <TextInput
           style={styles.input}
-          placeholder="Cafe Name (optional)"
+          placeholder="e.g. Bean & Brew Cafe"
           value={cafeName}
           onChangeText={setCafeName}
+          placeholderTextColor={colors.textSoft}
         />
 
-        <TouchableOpacity style={styles.uploadButton} onPress={pickFile}>
-          <Text style={styles.uploadButtonText}>
-            {file ? `📄 ${file.name}` : "📁 Select CSV File"}
-          </Text>
+        <TouchableOpacity
+          style={[styles.uploadZone, file && styles.uploadZoneFilled]}
+          onPress={pickFile}
+          activeOpacity={0.85}
+        >
+          {file ? (
+            <>
+              <FileSpreadsheet size={28} color={colors.primary} />
+              <Text style={styles.uploadFileName} numberOfLines={1}>
+                {file.name}
+              </Text>
+              <Text style={styles.uploadChange}>Tap to change file</Text>
+            </>
+          ) : (
+            <>
+              <Upload size={28} color={colors.textSoft} />
+              <Text style={styles.uploadPrompt}>Tap to select CSV file</Text>
+              <Text style={styles.uploadHint}>Supports .csv format</Text>
+            </>
+          )}
         </TouchableOpacity>
 
         {file && (
           <TouchableOpacity
-            style={styles.actionButton}
+            style={[styles.primaryBtn, loading && styles.btnDisabled]}
             onPress={handleAssess}
             disabled={loading}
+            activeOpacity={0.88}
           >
-            <Text style={styles.actionButtonText}>
-              {loading && step === "assessing"
-                ? "Analyzing with AI..."
-                : "🔍 AI Assess Dataset"}
-            </Text>
+            {loading && step === "assessing" ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <>
+                <Sparkles size={18} color={colors.white} />
+                <Text style={styles.primaryBtnText}>Analyze with AI</Text>
+              </>
+            )}
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Step 2: Review AI Assessment */}
-      {assessment && (
+      {/* Step 2: Assessment */}
+      {assessment && confidenceStyle && (
         <View
           style={[
-            styles.stepBox,
-            { borderColor: getConfidenceColor(assessment.confidence) },
+            styles.card,
+            { borderColor: confidenceStyle.border, borderWidth: 1.5 },
           ]}
         >
-          <Text style={styles.stepTitle}>
-            Step 2: AI Assessment Result{" "}
-            {assessment.confidence === "high"
-              ? "✅"
-              : assessment.confidence === "medium"
-                ? "⚠️"
-                : "❌"}
-          </Text>
+          <Text style={styles.cardTitle}>2. Review AI mapping</Text>
 
-          {/* Confidence Badge */}
           <View
             style={[
               styles.confidenceBadge,
-              { backgroundColor: getConfidenceColor(assessment.confidence) },
+              { backgroundColor: confidenceStyle.bg },
             ]}
           >
-            <Text style={styles.confidenceText}>
-              {assessment.confidence.toUpperCase()} CONFIDENCE
+            <Text style={[styles.confidenceText, { color: confidenceStyle.text }]}>
+              {assessment.confidence.toUpperCase()} confidence
             </Text>
           </View>
 
-          {/* AI Engine Badge */}
           {assessment.ai_engine && (
             <View style={styles.engineBadge}>
-              <Text style={styles.engineBadgeText}>
-                🤖 Engine:{" "}
+              <Zap size={14} color={colors.primary} />
+              <Text style={styles.engineText}>
                 {assessment.ai_engine === "ollama"
-                  ? "Ollama (Local)"
-                  : "Rule-based Only"}
+                  ? "Ollama (local AI)"
+                  : "Rule-based mapping"}
               </Text>
             </View>
           )}
 
-          {/* Layer Breakdown */}
-          <View style={styles.layerBox}>
-            <Text style={styles.layerTitle}>
-              🧠 How AI Mapped Your Columns:
-            </Text>
+          <View style={styles.layerCard}>
+            <Text style={styles.layerTitle}>How columns were mapped</Text>
             <View style={styles.layerRow}>
               <View style={styles.layerItem}>
                 <Text style={styles.layerNumber}>
                   {assessment.layer_breakdown?.rule_based_mapped || 0}
                 </Text>
-                <Text style={styles.layerLabel}>Rule-Based</Text>
+                <Text style={styles.layerLabel}>Rules</Text>
               </View>
+              <View style={styles.layerDivider} />
               <View style={styles.layerItem}>
                 <Text style={styles.layerNumber}>
                   {assessment.layer_breakdown?.llm_mapped || 0}
                 </Text>
-                <Text style={styles.layerLabel}>AI (Ollama)</Text>
+                <Text style={styles.layerLabel}>AI</Text>
               </View>
+              <View style={styles.layerDivider} />
               <View style={styles.layerItem}>
-                <Text style={styles.layerNumber}>
+                <Text style={[styles.layerNumber, { color: colors.error }]}>
                   {assessment.layer_breakdown?.needs_confirmation || 0}
                 </Text>
-                <Text style={styles.layerLabel}>Need You</Text>
+                <Text style={styles.layerLabel}>Review</Text>
               </View>
             </View>
-
-            {/* Diagnostic Info */}
-            {assessment.diagnostic && (
-              <View style={styles.diagnosticBox}>
-                <Text style={styles.diagnosticText}>
-                  {assessment.diagnostic}
-                </Text>
-              </View>
-            )}
+            {assessment.diagnostic ? (
+              <Text style={styles.diagnosticText}>{assessment.diagnostic}</Text>
+            ) : null}
           </View>
 
-          {/* Editable Mapping Table */}
-          <Text style={styles.sectionTitle}>
-            📝 Review & Edit Column Mappings:
-          </Text>
-          <Text style={styles.editHint}>
-            Tap any dropdown to change the mapping.
-          </Text>
+          <Text style={styles.sectionLabel}>Column mappings</Text>
+          <Text style={styles.editHint}>Tap a chip to change the mapping</Text>
 
           {editableMapping.map((entry) => {
             const currentValue =
@@ -311,33 +358,30 @@ export function UploadAndTrainScreen({
                 key={entry.original_column}
                 style={[
                   styles.mappingCard,
-                  entry.source === "llm" && styles.mappingCardLLM,
+                  entry.source === "llm" && styles.mappingCardLlm,
                   entry.source === "unmapped" && styles.mappingCardUnmapped,
                   isModified && styles.mappingCardModified,
                 ]}
               >
                 <View style={styles.mappingHeader}>
-                  <Text style={styles.mappingColumn}>
-                    {entry.original_column}
-                  </Text>
-                  <View style={styles.sourceBadge}>
-                    <Text style={styles.sourceBadgeText}>
-                      {getSourceIcon(entry.source)}{" "}
-                      {getSourceLabel(entry.source)}
+                  <Text style={styles.mappingColumn}>{entry.original_column}</Text>
+                  <View style={styles.sourcePill}>
+                    <Text style={styles.sourcePillText}>
+                      {entry.source === "llm"
+                        ? "AI"
+                        : entry.source === "rule"
+                          ? "Rule"
+                          : "Manual"}
                     </Text>
                   </View>
                 </View>
-
-                <Text style={styles.mappingCurrent}>
-                  Maps to:{" "}
-                  <Text style={{ fontWeight: "bold", color: "#2C3E50" }}>
-                    {currentValue}
-                  </Text>
-                  {isModified && (
-                    <Text style={styles.modifiedTag}> (edited by you)</Text>
-                  )}
+                <Text style={styles.mappingMapsTo}>
+                  Maps to{" "}
+                  <Text style={styles.mappingValue}>{currentValue}</Text>
+                  {isModified ? (
+                    <Text style={styles.modifiedTag}> · edited</Text>
+                  ) : null}
                 </Text>
-
                 <View style={styles.optionsRow}>
                   {(
                     entry.options || [
@@ -365,8 +409,7 @@ export function UploadAndTrainScreen({
                       <Text
                         style={[
                           styles.optionChipText,
-                          currentValue === option &&
-                            styles.optionChipTextSelected,
+                          currentValue === option && styles.optionChipTextSelected,
                         ]}
                       >
                         {option}
@@ -378,247 +421,407 @@ export function UploadAndTrainScreen({
             );
           })}
 
-          {/* Issues */}
           {(assessment.data_quality_issues || []).length > 0 && (
-            <>
-              <Text style={[styles.sectionTitle, { color: "#E74C3C" }]}>
-                ⚠️ Data Quality Issues:
-              </Text>
-              {(assessment.data_quality_issues || []).map(
-                (issue: string, i: number) => (
-                  <Text key={i} style={styles.issueText}>
-                    • {issue}
-                  </Text>
-                ),
-              )}
-            </>
+            <View style={styles.alertBox}>
+              <Text style={styles.alertTitle}>Data quality issues</Text>
+              {(assessment.data_quality_issues || []).map((issue, i) => (
+                <Text key={i} style={styles.alertItem}>
+                  · {issue}
+                </Text>
+              ))}
+            </View>
           )}
 
           {(assessment.suggestions || []).length > 0 && (
-            <>
-              <Text style={styles.sectionTitle}>💡 AI Suggestions:</Text>
-              {(assessment.suggestions || []).map((s: string, i: number) => (
-                <Text key={i} style={styles.suggestionText}>
-                  • {s}
+            <View style={styles.tipBox}>
+              <Text style={styles.tipTitle}>Suggestions</Text>
+              {(assessment.suggestions || []).map((s, i) => (
+                <Text key={i} style={styles.tipItem}>
+                  · {s}
                 </Text>
               ))}
-            </>
+            </View>
           )}
 
-          {/* Missing Required Warning */}
           {(assessment.missing_required || []).length > 0 && (
             <View style={styles.warningBox}>
               <Text style={styles.warningText}>
-                ❌ Missing required:{" "}
-                {(assessment.missing_required || []).join(", ")}
+                Missing required: {(assessment.missing_required || []).join(", ")}
               </Text>
               <Text style={styles.warningSub}>
-                Please map these above before training.
+                Map these columns above before training.
               </Text>
             </View>
           )}
 
-          {/* Train Button */}
           <TouchableOpacity
             style={[
-              styles.actionButton,
-              {
-                backgroundColor: assessment.usable ? "#27AE60" : "#BDC3C7",
-                marginTop: 16,
-              },
+              styles.primaryBtn,
+              !assessment.usable && styles.btnDisabled,
+              loading && styles.btnDisabled,
             ]}
             onPress={handleTrain}
             disabled={!assessment.usable || loading}
+            activeOpacity={0.88}
           >
-            <Text style={styles.actionButtonText}>
-              {loading && step === "training"
-                ? "Training XGBoost Model..."
-                : assessment.usable
-                  ? "🚀 Train AI Model"
-                  : "🔧 Fix Mappings to Train"}
-            </Text>
+            {loading && step === "training" ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <>
+                <ChevronRight size={18} color={colors.white} />
+                <Text style={styles.primaryBtnText}>
+                  {assessment.usable ? "Train model" : "Fix mappings to train"}
+                </Text>
+              </>
+            )}
           </TouchableOpacity>
         </View>
       )}
 
       {/* Step 3: Done */}
       {trainingResult && (
-        <View style={[styles.stepBox, { borderColor: "#3498DB" }]}>
-          <Text style={styles.stepTitle}>Step 3: Training Complete! 🎉</Text>
-
-          <View style={styles.resultCard}>
-            <Text style={styles.resultCafeName}>
-              {trainingResult.cafe_name}
-            </Text>
-            <Text style={styles.resultId}>ID: {trainingResult.cafe_id}</Text>
-
-            <View style={styles.statGrid}>
-              <View style={styles.statItem}>
-                <Text style={styles.statValue}>{trainingResult.rows_used}</Text>
-                <Text style={styles.statLabel}>Rows Trained</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={styles.statValue}>
-                  {trainingResult.items.length}
-                </Text>
-                <Text style={styles.statLabel}>Menu Items</Text>
-              </View>
-              <View style={styles.statItem}>
-                <Text style={styles.statValue}>
-                  {(trainingResult.r2 * 100).toFixed(1)}%
-                </Text>
-                <Text style={styles.statLabel}>Accuracy</Text>
-              </View>
+        <View style={[styles.card, styles.successCard]}>
+          <View style={styles.successHeader}>
+            <View style={styles.successIconWrap}>
+              <CheckCircle2 size={28} color={colors.success} />
             </View>
-
-            <Text style={styles.sectionTitle}>Your Menu Items:</Text>
-            <View style={styles.itemsList}>
-              {trainingResult.items.map((item) => (
-                <View key={item} style={styles.itemChip}>
-                  <Text style={styles.itemChipText}>{item}</Text>
-                </View>
-              ))}
+            <View>
+              <Text style={styles.successTitle}>Model ready!</Text>
+              <Text style={styles.successSubtitle}>
+                {trainingResult.cafe_name}
+              </Text>
             </View>
-
-            <Text style={styles.readyText}>
-              ✅ Ready for predictions! Go to AI Predict tab.
-            </Text>
           </View>
+
+          <View style={styles.statRow}>
+            <View style={styles.statBox}>
+              <Text style={styles.statValue}>{trainingResult.rows_used}</Text>
+              <Text style={styles.statLabel}>Rows trained</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={styles.statValue}>{trainingResult.items.length}</Text>
+              <Text style={styles.statLabel}>Menu items</Text>
+            </View>
+            <View style={styles.statBox}>
+              <Text style={[styles.statValue, { color: colors.success }]}>
+                {(trainingResult.r2 * 100).toFixed(1)}%
+              </Text>
+              <Text style={styles.statLabel}>Accuracy</Text>
+            </View>
+          </View>
+
+          <Text style={styles.sectionLabel}>Detected menu items</Text>
+          <View style={styles.itemsWrap}>
+            {trainingResult.items.map((item) => (
+              <View key={item} style={styles.itemChip}>
+                <Text style={styles.itemChipText}>{item}</Text>
+              </View>
+            ))}
+          </View>
+
+          <Text style={styles.readyNote}>
+            You can now run predictions on your dashboard below.
+          </Text>
         </View>
       )}
 
-      {loading && (
+      {loading && step !== "assessing" && step !== "training" && (
         <ActivityIndicator
-          style={{ marginTop: 20 }}
-          size="large"
-          color="#3498DB"
+          style={{ marginTop: spacing.md }}
+          color={colors.primary}
         />
       )}
-    </ScrollView>
+
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: "#fff" },
+  wrapper: {
+    padding: spacing.md,
+    backgroundColor: "transparent",
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  headerIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerText: {
+    flex: 1,
+  },
   title: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 20,
-    color: "#2C3E50",
+    fontSize: 18,
+    fontWeight: "800",
+    color: colors.text,
+    letterSpacing: -0.3,
+    marginBottom: 2,
   },
-  stepBox: {
-    backgroundColor: "#F8F9FA",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    borderWidth: 2,
-    borderColor: "#ECF0F1",
+  subtitle: {
+    fontSize: 13,
+    color: colors.textSoft,
+    lineHeight: 18,
   },
-  stepTitle: {
+  stepIndicator: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.sm,
+  },
+  stepItem: {
+    alignItems: "center",
+    gap: 4,
+  },
+  stepDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepDotActive: {
+    backgroundColor: colors.primary,
+  },
+  stepDotText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.textSoft,
+  },
+  stepDotTextActive: {
+    color: colors.white,
+  },
+  stepLabel: {
+    fontSize: 11,
+    color: colors.textSoft,
+    fontWeight: "500",
+  },
+  stepLabelActive: {
+    color: colors.primary,
+    fontWeight: "700",
+  },
+  stepLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: colors.border,
+    marginHorizontal: 6,
+    marginBottom: 18,
+  },
+  stepLineActive: {
+    backgroundColor: colors.primary,
+  },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(106, 60, 0, 0.1)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  successCard: {
+    borderColor: "rgba(143, 151, 121, 0.3)",
+    backgroundColor: colors.successSoft,
+  },
+  cardTitle: {
     fontSize: 16,
-    fontWeight: "bold",
-    color: "#2C3E50",
-    marginBottom: 8,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 4,
   },
-  stepDesc: { fontSize: 13, color: "#7F8C8D", marginBottom: 12 },
+  cardDesc: {
+    fontSize: 13,
+    color: colors.textSoft,
+    lineHeight: 18,
+    marginBottom: spacing.md,
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textSoft,
+    marginBottom: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
   input: {
     borderWidth: 1,
-    borderColor: "#BDC3C7",
-    borderRadius: 8,
-    padding: 10,
+    borderColor: colors.border,
+    borderRadius: 12,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
     fontSize: 15,
-    marginBottom: 12,
+    color: colors.text,
+    backgroundColor: colors.background,
+    marginBottom: spacing.md,
   },
-  uploadButton: {
-    backgroundColor: "#ECF0F1",
-    padding: 16,
-    borderRadius: 8,
-    alignItems: "center",
+  uploadZone: {
     borderWidth: 2,
     borderStyle: "dashed",
-    borderColor: "#BDC3C7",
-  },
-  uploadButtonText: { color: "#2C3E50", fontWeight: "600" },
-  actionButton: {
-    backgroundColor: "#3498DB",
-    padding: 14,
-    borderRadius: 8,
+    borderColor: colors.border,
+    borderRadius: 14,
+    padding: spacing.xl,
     alignItems: "center",
-    marginTop: 12,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    backgroundColor: colors.background,
   },
-  actionButtonText: { color: "#fff", fontWeight: "bold", fontSize: 15 },
-
-  confidenceBadge: {
-    alignSelf: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 16,
-    marginBottom: 12,
+  uploadZoneFilled: {
+    borderColor: colors.primary,
+    borderStyle: "solid",
+    backgroundColor: colors.primarySoft,
   },
-  confidenceText: { color: "#fff", fontWeight: "bold", fontSize: 12 },
-
-  engineBadge: {
-    alignSelf: "center",
-    backgroundColor: "#E3F2FD",
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+  uploadPrompt: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  uploadHint: {
+    fontSize: 12,
+    color: colors.textSoft,
+  },
+  uploadFileName: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.primary,
+    maxWidth: "90%",
+  },
+  uploadChange: {
+    fontSize: 12,
+    color: colors.textSoft,
+  },
+  primaryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.primary,
+    paddingVertical: 14,
     borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "#2196F3",
   },
-  engineBadgeText: { color: "#1565C0", fontWeight: "600", fontSize: 12 },
-
-  layerBox: {
-    backgroundColor: "#fff",
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
+  primaryBtnText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  btnDisabled: {
+    opacity: 0.5,
+  },
+  confidenceBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginBottom: spacing.sm,
+  },
+  confidenceText: {
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  engineBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    marginBottom: spacing.md,
+  },
+  engineText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  layerCard: {
+    backgroundColor: colors.background,
+    borderRadius: 12,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
   layerTitle: {
     fontSize: 13,
     fontWeight: "600",
-    color: "#2C3E50",
-    marginBottom: 8,
+    color: colors.text,
+    marginBottom: spacing.sm,
   },
-  layerRow: { flexDirection: "row", justifyContent: "space-around" },
-  layerItem: { alignItems: "center" },
-  layerNumber: { fontSize: 20, fontWeight: "bold", color: "#3498DB" },
-  layerLabel: { fontSize: 11, color: "#7F8C8D", marginTop: 2 },
-
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: "bold",
-    color: "#2C3E50",
-    marginTop: 12,
-    marginBottom: 6,
+  layerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  layerItem: {
+    flex: 1,
+    alignItems: "center",
+  },
+  layerDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: colors.border,
+  },
+  layerNumber: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: colors.primary,
+    marginBottom: 2,
+  },
+  layerLabel: {
+    fontSize: 11,
+    color: colors.textSoft,
+    fontWeight: "500",
+  },
+  diagnosticText: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: spacing.sm,
+    lineHeight: 18,
+    fontStyle: "italic",
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textSoft,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 4,
   },
   editHint: {
     fontSize: 12,
-    color: "#F39C12",
-    fontStyle: "italic",
-    marginBottom: 12,
+    color: colors.primary,
+    marginBottom: spacing.sm,
   },
-
   mappingCard: {
-    backgroundColor: "#fff",
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
+    backgroundColor: colors.background,
+    padding: spacing.sm,
+    borderRadius: 12,
+    marginBottom: spacing.sm,
     borderLeftWidth: 3,
-    borderLeftColor: "#3498DB",
+    borderLeftColor: colors.primary,
   },
-  mappingCardLLM: {
+  mappingCardLlm: {
     borderLeftColor: "#9B59B6",
-    backgroundColor: "#F3E5F5",
+    backgroundColor: "#faf5ff",
   },
   mappingCardUnmapped: {
-    borderLeftColor: "#F39C12",
-    backgroundColor: "#FFF8E1",
+    borderLeftColor: "#f59e0b",
+    backgroundColor: "#fffbeb",
   },
   mappingCardModified: {
-    borderLeftColor: "#27AE60",
-    backgroundColor: "#E8F5E9",
+    borderLeftColor: colors.success,
+    backgroundColor: colors.successSoft,
   },
   mappingHeader: {
     flexDirection: "row",
@@ -626,100 +829,186 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 4,
   },
-  mappingColumn: { fontSize: 14, fontWeight: "bold", color: "#2C3E50" },
-  sourceBadge: {
-    backgroundColor: "#ECF0F1",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
+  mappingColumn: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text,
+    flex: 1,
   },
-  sourceBadgeText: { fontSize: 11, color: "#2C3E50" },
-  mappingCurrent: { fontSize: 12, color: "#7F8C8D", marginBottom: 8 },
-  modifiedTag: { color: "#27AE60", fontWeight: "bold" },
-
-  optionsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  sourcePill: {
+    backgroundColor: colors.white,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  sourcePillText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.textSoft,
+  },
+  mappingMapsTo: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginBottom: spacing.sm,
+  },
+  mappingValue: {
+    fontWeight: "700",
+    color: colors.text,
+  },
+  modifiedTag: {
+    color: colors.success,
+    fontWeight: "600",
+  },
+  optionsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
   optionChip: {
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    backgroundColor: "#ECF0F1",
+    paddingVertical: 5,
+    borderRadius: 16,
+    backgroundColor: colors.white,
     borderWidth: 1,
-    borderColor: "#BDC3C7",
+    borderColor: colors.border,
   },
-  optionChipSelected: { backgroundColor: "#3498DB", borderColor: "#3498DB" },
-  optionChipText: { fontSize: 11, color: "#2C3E50" },
-  optionChipTextSelected: { color: "#fff", fontWeight: "600" },
-
-  issueText: { fontSize: 12, color: "#E74C3C", marginLeft: 8, marginBottom: 2 },
-  suggestionText: {
-    fontSize: 12,
-    color: "#3498DB",
-    marginLeft: 8,
-    marginBottom: 2,
-    fontStyle: "italic",
+  optionChipSelected: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
-
-  warningBox: {
-    backgroundColor: "#FADBD8",
-    padding: 12,
-    borderRadius: 8,
-    marginTop: 12,
-  },
-  warningText: { fontSize: 13, color: "#C0392B", fontWeight: "bold" },
-  warningSub: { fontSize: 11, color: "#E74C3C", marginTop: 4 },
-
-  resultCard: {
-    backgroundColor: "#fff",
-    padding: 16,
-    borderRadius: 8,
-    marginTop: 8,
-  },
-  resultCafeName: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#2C3E50",
-    textAlign: "center",
-  },
-  resultId: {
+  optionChipText: {
     fontSize: 11,
-    color: "#7F8C8D",
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  statGrid: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginVertical: 12,
-  },
-  statItem: { alignItems: "center" },
-  statValue: { fontSize: 24, fontWeight: "bold", color: "#3498DB" },
-  statLabel: { fontSize: 11, color: "#7F8C8D" },
-  itemsList: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
-  itemChip: {
-    backgroundColor: "#ECF0F1",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  itemChipText: { fontSize: 12, color: "#2C3E50" },
-  readyText: {
-    fontSize: 14,
-    color: "#27AE60",
-    fontWeight: "bold",
-    textAlign: "center",
-    marginTop: 16,
-  },
-  diagnosticBox: {
-    backgroundColor: "#E3F2FD",
-    padding: 10,
-    borderRadius: 6,
-    marginTop: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: "#2196F3",
-  },
-  diagnosticText: {
-    fontSize: 12,
-    color: "#1565C0",
+    color: colors.textSoft,
     fontWeight: "500",
+  },
+  optionChipTextSelected: {
+    color: colors.white,
+    fontWeight: "700",
+  },
+  alertBox: {
+    backgroundColor: colors.errorSoft,
+    borderRadius: 12,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  alertTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.error,
+    marginBottom: 4,
+  },
+  alertItem: {
+    fontSize: 12,
+    color: colors.error,
+    lineHeight: 18,
+  },
+  tipBox: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: 12,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  tipTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.primary,
+    marginBottom: 4,
+  },
+  tipItem: {
+    fontSize: 12,
+    color: colors.text,
+    lineHeight: 18,
+  },
+  warningBox: {
+    backgroundColor: colors.errorSoft,
+    padding: spacing.sm,
+    borderRadius: 12,
+    marginBottom: spacing.md,
+  },
+  warningText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.error,
+  },
+  warningSub: {
+    fontSize: 11,
+    color: colors.error,
+    marginTop: 4,
+  },
+  successHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  successIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  successTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  successSubtitle: {
+    fontSize: 14,
+    color: colors.textSoft,
+    marginTop: 2,
+  },
+  statRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  statBox: {
+    flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: spacing.sm,
+    alignItems: "center",
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.primary,
+    marginBottom: 2,
+  },
+  statLabel: {
+    fontSize: 10,
+    color: colors.textSoft,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  itemsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: spacing.md,
+  },
+  itemChip: {
+    backgroundColor: colors.white,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(143, 151, 121, 0.3)",
+  },
+  itemChipText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  readyNote: {
+    fontSize: 13,
+    color: colors.success,
+    fontWeight: "600",
+    textAlign: "center",
+    lineHeight: 18,
   },
 });

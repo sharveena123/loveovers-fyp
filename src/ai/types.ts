@@ -13,7 +13,6 @@ export type DayOfWeek =
 
 export type Weather = "Sunny" | "Cloudy" | "Rainy" | "Unknown";
 
-// Editable mapping entry from /assess
 export type EditableMappingEntry = {
   original_column: string;
   current_mapping: string;
@@ -25,7 +24,6 @@ export type EditableMappingEntry = {
   options: string[];
 };
 
-// Layer breakdown from assessment
 export type LayerBreakdown = {
   rule_based_mapped: number;
   llm_mapped: number;
@@ -54,7 +52,6 @@ export type DatasetAssessment = {
   ai_engine?: string;
 };
 
-// Column that needs user confirmation (legacy, kept for compatibility)
 export type NeedsConfirmation = {
   column: string;
   suggested_mapping: string;
@@ -66,7 +63,7 @@ export type TrainingResult = {
   cafe_id: string;
   cafe_name: string;
   status: string;
-  model: string; // will now say "XGBoost+LightGBM+CatBoost Ensemble"
+  model: string;
   rows_used: number;
   items: string[];
   mae: number;
@@ -76,7 +73,6 @@ export type TrainingResult = {
   detected_mapping: Record<string, string>;
   top_features?: Record<string, number>;
   message: string;
-  // NEW: ensemble-specific
   model_breakdown?: {
     xgboost: { mae: number; r2: number };
     lightgbm: { mae: number; r2: number };
@@ -95,7 +91,6 @@ export type PredictionRequest = {
   discount_pct?: number;
   produced_qty?: number;
   date?: string;
-  // Historical context for lag features
   sold_qty_lag_1?: number;
   sold_qty_lag_7?: number;
   sold_qty_lag_14?: number;
@@ -174,4 +169,98 @@ export type AssessmentUpdateResponse = {
   usable: boolean;
   editable_mapping: EditableMappingEntry[];
   message: string;
+};
+
+// ─── Dataset analytics (training CSV) ─────────────────────
+
+export type DatasetRow = Record<string, string | number | null | undefined>;
+
+export type CafeDatasetResponse = {
+  cafe_id: string;
+  cafe_name: string;
+  records: DatasetRow[];
+  summary?: {
+    total_rows?: number;
+    items?: string[];
+    date_start?: string;
+    date_end?: string;
+    r2?: number;
+  };
+};
+
+export type DailySalesPoint = {
+  label: string;
+  date: string;
+  sales: number;
+  orders: number;
+  sold: number;
+  waste: number;
+};
+
+export type ItemWasteRow = {
+  itemName: string;
+  sold: number;
+  waste: number;
+  produced: number;
+  wastePercentage: number;
+  revenue: number;
+};
+
+export type ScatterPoint = {
+  item: string;
+  prepared: number;
+  sold: number;
+};
+
+export type HeatmapCell = {
+  day: string;
+  time: string;
+  orders: number;
+};
+
+export type FunnelStage = {
+  stage: string;
+  count: number;
+  color: string;
+};
+
+export type SurplusPoint = {
+  label: string;
+  surplus: number;
+  sold: number;
+};
+
+export type ItemForecast = {
+  item: string;
+  predicted: number;
+  recommended: number;
+};
+
+export type DatasetAnalyticsBundle = {
+  cafeId: string;
+  cafeName: string;
+  dataSource: "dataset" | "firebase";
+  trainingRows: number;
+  modelAccuracy: number;
+  dateRange: { start: string; end: string };
+  itemForecasts?: ItemForecast[];
+  kpis: {
+    totalSales: number;
+    itemsSold: number;
+    wastePercentage: number;
+    revenueSaved: number;
+    topProduct: string;
+    conversionRate: number;
+    averageOrderValue: number;
+  };
+  salesOverTime: DailySalesPoint[];
+  topSellingItems: ItemWasteRow[];
+  wasteAnalysis: ItemWasteRow[];
+  revenueByCategory: { label: string; value: number; color: string }[];
+  actualVsPredicted: { label: string; actual: number; predicted: number }[];
+  surplusTrend: SurplusPoint[];
+  scatterData: ScatterPoint[];
+  heatmap: HeatmapCell[];
+  funnel: FunnelStage[];
+  insights: string[];
 };

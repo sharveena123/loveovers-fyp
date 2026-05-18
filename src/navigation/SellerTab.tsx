@@ -4,12 +4,7 @@ import OrdersScreen from "@/app/(seller)/orders";
 import ProfileScreen from "@/app/(seller)/profile";
 import SellerChat from "@/app/(seller)/sellerchat";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
-import {
-  Home,
-  MessageSquare,
-  Package,
-  User
-} from "lucide-react-native";
+import { Home, MessageSquare, Package, User } from "lucide-react-native";
 import React from "react";
 
 const Tab = createBottomTabNavigator();

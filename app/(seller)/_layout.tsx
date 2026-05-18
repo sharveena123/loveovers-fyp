@@ -21,7 +21,7 @@ export default function SellerLayout() {
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="support" options={{ headerShown: false }} />
-      <Stack.Screen name="edit" options={{ headerShown: false }} />
+      <Stack.Screen name="sellereditprofile" options={{ headerShown: false }} />
       <Stack.Screen name="analytics" options={{ headerShown: false }} />
       <Stack.Screen name="chat/[id]" options={{ headerShown: false }} />
     </Stack>

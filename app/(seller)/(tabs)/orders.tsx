@@ -1,43 +1,204 @@
-import { Text } from "@/src/components/StyledText";
+import { Text, TextInput } from "@/src/components/StyledText";
 import { auth } from "@/src/services/firebase/config";
 import { Order, orderService } from "@/src/services/firebase/inventoryServices";
 import { getUserProfile, SellerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { router } from "expo-router";
-import { Clock, Phone, Search } from "lucide-react-native";
-import React, { useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import {
+  CheckCircle2,
+  Clock,
+  Package,
+  Phone,
+  Search,
+  ShoppingBag,
+  X,
+} from "lucide-react-native";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+
+type FilterStatus = "all" | "pending" | "ready" | "completed";
+
+const FILTERS: { key: FilterStatus; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "pending", label: "Pending" },
+  { key: "ready", label: "Ready" },
+  { key: "completed", label: "Done" },
+];
+
+function getInitials(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n.charAt(0).toUpperCase())
+    .join("")
+    .slice(0, 2);
+}
+
+function getStatusStyle(status: Order["status"]) {
+  switch (status) {
+    case "pending":
+      return {
+        bg: "#1a1a1a",
+        text: colors.white,
+        icon: <Clock size={12} color={colors.white} />,
+      };
+    case "ready":
+    case "confirmed":
+      return {
+        bg: colors.primary,
+        text: colors.white,
+        icon: <CheckCircle2 size={12} color={colors.white} />,
+      };
+    case "completed":
+      return {
+        bg: colors.successSoft,
+        text: colors.success,
+        icon: <CheckCircle2 size={12} color={colors.success} />,
+      };
+    case "cancelled":
+      return {
+        bg: colors.errorSoft,
+        text: colors.error,
+        icon: <X size={12} color={colors.error} />,
+      };
+    default:
+      return {
+        bg: colors.border,
+        text: colors.textSoft,
+        icon: <Clock size={12} color={colors.textSoft} />,
+      };
+  }
+}
+
+function formatOrderTime(createdAt: Order["createdAt"]) {
+  if (!createdAt) return "N/A";
+  return new Date(createdAt.toDate()).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function OrderCard({
+  order,
+  onMarkReady,
+  onCancel,
+}: {
+  order: Order;
+  onMarkReady: () => void;
+  onCancel: () => void;
+}) {
+  const statusStyle = getStatusStyle(order.status);
+  const itemLabel =
+    order.mysteryBag ||
+    order.items?.map((i) => i.name).join(", ") ||
+    "Order items";
+
+  return (
+    <View style={styles.orderCard}>
+      <View style={styles.orderCardHeader}>
+        <View style={styles.customerRow}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>
+              {getInitials(order.customerName)}
+            </Text>
+          </View>
+          <View style={styles.customerMeta}>
+            <Text style={styles.customerName}>{order.customerName}</Text>
+            <Text style={styles.orderId}>#{order.orderId}</Text>
+          </View>
+        </View>
+        <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
+          {statusStyle.icon}
+          <Text style={[styles.statusText, { color: statusStyle.text }]}>
+            {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.orderItemRow}>
+        <View style={styles.orderItemIcon}>
+          <ShoppingBag size={18} color={colors.primary} />
+        </View>
+        <View style={styles.orderItemInfo}>
+          <Text style={styles.orderItemLabel}>Items</Text>
+          <Text style={styles.orderItemName} numberOfLines={2}>
+            {itemLabel}
+          </Text>
+        </View>
+        <Text style={styles.orderTotal}>RM{order.total.toFixed(2)}</Text>
+      </View>
+
+      <View style={styles.orderMetaGrid}>
+        <View style={styles.metaCell}>
+          <Text style={styles.metaLabel}>Pickup</Text>
+          <Text style={styles.metaValue}>{order.pickupTime || "—"}</Text>
+        </View>
+        <View style={styles.metaDivider} />
+        <View style={styles.metaCell}>
+          <Text style={styles.metaLabel}>Ordered</Text>
+          <Text style={styles.metaValue}>
+            {formatOrderTime(order.createdAt)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.phoneRow}>
+        <Phone size={15} color={colors.primary} />
+        <Text style={styles.phoneText}>{order.customerPhone}</Text>
+      </View>
+
+      {order.status === "pending" && (
+        <View style={styles.actionRow}>
+          <TouchableOpacity
+            style={styles.readyButton}
+            onPress={onMarkReady}
+            activeOpacity={0.88}
+          >
+            <CheckCircle2 size={16} color={colors.white} />
+            <Text style={styles.readyButtonText}>Mark as ready</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.cancelButton}
+            onPress={onCancel}
+            activeOpacity={0.88}
+          >
+            <Text style={styles.cancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
+  );
+}
 
 export default function OrdersScreen() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sellerProfile, setSellerProfile] = useState<SellerProfile | null>(
-    null,
-  );
-  const [activeFilter, setActiveFilter] = useState<
-    "all" | "pending" | "ready" | "completed"
-  >("all");
+  const [refreshing, setRefreshing] = useState(false);
+  const [sellerProfile, setSellerProfile] = useState<SellerProfile | null>(null);
+  const [activeFilter, setActiveFilter] = useState<FilterStatus>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  useEffect(() => {
-    checkAuthAndLoadData();
+  const fetchOrders = useCallback(async (sellerId: string) => {
+    try {
+      const fetchedOrders = await orderService.getOrders(sellerId);
+      setOrders(fetchedOrders);
+    } catch (error) {
+      console.error("Error fetching orders:", error);
+      Alert.alert("Error", "Failed to load orders");
+    }
   }, []);
 
-  useEffect(() => {
-    filterOrders();
-  }, [orders, activeFilter, searchQuery]);
-
-  const checkAuthAndLoadData = async () => {
+  const checkAuthAndLoadData = useCallback(async () => {
     const user = auth.currentUser;
 
     if (!user) {
@@ -47,6 +208,7 @@ export default function OrdersScreen() {
       return;
     }
 
+    setLoading(true);
     try {
       const profile = await getUserProfile(user.uid);
 
@@ -62,43 +224,48 @@ export default function OrdersScreen() {
     } catch (error) {
       console.error("Error loading profile:", error);
       Alert.alert("Error", "Failed to load profile");
-    }
-  };
-
-  const fetchOrders = async (sellerId: string) => {
-    setLoading(true);
-    try {
-      const fetchedOrders = await orderService.getOrders(sellerId);
-      setOrders(fetchedOrders);
-    } catch (error) {
-      console.error("Error fetching orders:", error);
-      Alert.alert("Error", "Failed to load orders");
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchOrders]);
 
-  const filterOrders = () => {
+  useEffect(() => {
+    checkAuthAndLoadData();
+  }, [checkAuthAndLoadData]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (auth.currentUser) {
+        fetchOrders(auth.currentUser.uid);
+      }
+    }, [fetchOrders]),
+  );
+
+  useEffect(() => {
     let filtered = orders;
 
-    // Filter by status
     if (activeFilter !== "all") {
       filtered = filtered.filter((order) => order.status === activeFilter);
     }
 
-    // Filter by search query
     if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
       filtered = filtered.filter(
         (order) =>
-          order.customerName
-            .toLowerCase()
-            .includes(searchQuery.toLowerCase()) ||
-          order.orderId.toLowerCase().includes(searchQuery.toLowerCase()),
+          order.customerName.toLowerCase().includes(q) ||
+          order.orderId.toLowerCase().includes(q),
       );
     }
 
     setFilteredOrders(filtered);
-  };
+  }, [orders, activeFilter, searchQuery]);
+
+  const handleRefresh = useCallback(async () => {
+    if (!auth.currentUser) return;
+    setRefreshing(true);
+    await fetchOrders(auth.currentUser.uid);
+    setRefreshing(false);
+  }, [fetchOrders]);
 
   const handleMarkAsReady = async (orderId: string) => {
     if (!auth.currentUser) return;
@@ -120,10 +287,10 @@ export default function OrdersScreen() {
   const handleCancelOrder = async (orderId: string) => {
     if (!auth.currentUser) return;
 
-    Alert.alert("Cancel Order", "Are you sure you want to cancel this order?", [
+    Alert.alert("Cancel order", "Are you sure you want to cancel this order?", [
       { text: "No", style: "cancel" },
       {
-        text: "Yes",
+        text: "Yes, cancel",
         style: "destructive",
         onPress: async () => {
           try {
@@ -143,270 +310,164 @@ export default function OrdersScreen() {
     ]);
   };
 
-  const getStatusCount = (status: "pending" | "ready" | "completed") => {
-    return orders.filter((order) => order.status === status).length;
-  };
-
-  const getInitials = (name: string) => {
-    const names = name.split(" ");
-    return names.map((n) => n.charAt(0).toUpperCase()).join("");
-  };
+  const getStatusCount = (status: "pending" | "ready" | "completed") =>
+    orders.filter((order) => order.status === status).length;
 
   if (loading || !sellerProfile) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator
-          size="large"
-          color={colors.primary}
-          style={{ marginTop: 200 }}
-        />
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading orders…</Text>
+        </View>
       </SafeAreaView>
     );
   }
 
+  const pendingCount = getStatusCount("pending");
+  const readyCount = getStatusCount("ready");
+  const completedCount = getStatusCount("completed");
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Orders Management</Text>
-        <Text style={styles.headerSubtitle}>
-          Track and manage customer orders
-        </Text>
-      </View>
-
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Search */}
-        <View style={styles.searchContainer}>
-          <Search size={20} color={colors.textSoft} style={styles.searchIcon} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search by order ID or customer name..."
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholderTextColor={colors.textSoft}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
           />
-        </View>
-
-        {/* Stats Cards */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{getStatusCount("pending")}</Text>
-            <Text style={styles.statLabel}>Pending</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={[styles.statNumber, { color: colors.primary }]}>
-              {getStatusCount("ready")}
+        }
+      >
+        <View style={styles.header}>
+          <View style={styles.headerDecor} />
+          <View style={styles.headerContent}>
+            <Text style={styles.headerTitle}>Orders</Text>
+            <Text style={styles.headerSubtitle}>
+              {orders.length} total · {pendingCount} need action
             </Text>
-            <Text style={styles.statLabel}>Ready</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={[styles.statNumber, { color: colors.textSoft }]}>
-              {getStatusCount("completed")}
-            </Text>
-            <Text style={styles.statLabel}>Completed</Text>
           </View>
         </View>
 
-        {/* Filter Tabs */}
-        <View style={styles.filterContainer}>
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              activeFilter === "pending" && styles.filterTabActive,
-            ]}
-            onPress={() => setActiveFilter("pending")}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                activeFilter === "pending" && styles.filterTextActive,
-              ]}
-            >
-              Pending
-            </Text>
-            {getStatusCount("pending") > 0 && (
-              <View style={styles.filterBadge}>
-                <Text style={styles.filterBadgeText}>
-                  {getStatusCount("pending")}
-                </Text>
-              </View>
+        <View style={styles.body}>
+          <View style={styles.searchBar}>
+            <Search size={18} color={colors.textSoft} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search customer or order ID…"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholderTextColor={colors.textSoft}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
+                <X size={18} color={colors.textSoft} />
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              activeFilter === "ready" && styles.filterTabActive,
-            ]}
-            onPress={() => setActiveFilter("ready")}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                activeFilter === "ready" && styles.filterTextActive,
-              ]}
-            >
-              Ready
-            </Text>
-            {getStatusCount("ready") > 0 && (
+          <View style={styles.statsRow}>
+            <View style={[styles.statCard, styles.statCardPending]}>
+              <View style={[styles.statIconWrap, { backgroundColor: "#f0f0f0" }]}>
+                <Clock size={18} color={colors.text} />
+              </View>
+              <Text style={styles.statNumber}>{pendingCount}</Text>
+              <Text style={styles.statLabel}>Pending</Text>
+            </View>
+            <View style={[styles.statCard, styles.statCardReady]}>
               <View
-                style={[
-                  styles.filterBadge,
-                  { backgroundColor: colors.primary },
-                ]}
+                style={[styles.statIconWrap, { backgroundColor: colors.primarySoft }]}
               >
-                <Text style={styles.filterBadgeText}>
-                  {getStatusCount("ready")}
-                </Text>
+                <Package size={18} color={colors.primary} />
               </View>
-            )}
-          </TouchableOpacity>
+              <Text style={[styles.statNumber, { color: colors.primary }]}>
+                {readyCount}
+              </Text>
+              <Text style={styles.statLabel}>Ready</Text>
+            </View>
+            <View style={[styles.statCard, styles.statCardDone]}>
+              <View
+                style={[styles.statIconWrap, { backgroundColor: colors.successSoft }]}
+              >
+                <CheckCircle2 size={18} color={colors.success} />
+              </View>
+              <Text style={[styles.statNumber, { color: colors.success }]}>
+                {completedCount}
+              </Text>
+              <Text style={styles.statLabel}>Completed</Text>
+            </View>
+          </View>
 
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              activeFilter === "completed" && styles.filterTabActive,
-            ]}
-            onPress={() => setActiveFilter("completed")}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.filterScroll}
           >
-            <Text
-              style={[
-                styles.filterText,
-                activeFilter === "completed" && styles.filterTextActive,
-              ]}
-            >
-              Done
-            </Text>
-          </TouchableOpacity>
+            {FILTERS.map(({ key, label }) => {
+              const isActive = activeFilter === key;
+              const count =
+                key === "all"
+                  ? orders.length
+                  : getStatusCount(key as "pending" | "ready" | "completed");
 
-          <TouchableOpacity
-            style={[
-              styles.filterTab,
-              activeFilter === "all" && styles.filterTabActive,
-            ]}
-            onPress={() => setActiveFilter("all")}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                activeFilter === "all" && styles.filterTextActive,
-              ]}
-            >
-              All
-            </Text>
-          </TouchableOpacity>
-        </View>
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[styles.filterChip, isActive && styles.filterChipActive]}
+                  onPress={() => setActiveFilter(key)}
+                  activeOpacity={0.85}
+                >
+                  <Text
+                    style={[
+                      styles.filterChipText,
+                      isActive && styles.filterChipTextActive,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                  {count > 0 && (
+                    <View
+                      style={[
+                        styles.filterCount,
+                        isActive && styles.filterCountActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.filterCountText,
+                          isActive && styles.filterCountTextActive,
+                        ]}
+                      >
+                        {count}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
 
-        {/* Orders List */}
-        <View style={styles.ordersContainer}>
           {filteredOrders.length === 0 ? (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>No orders found</Text>
+              <View style={styles.emptyIconWrap}>
+                <Package size={32} color={colors.primary} />
+              </View>
+              <Text style={styles.emptyTitle}>No orders found</Text>
               <Text style={styles.emptySubtext}>
-                Orders will appear here when customers place them
+                {searchQuery.trim()
+                  ? "Try a different search term"
+                  : "New orders will show up here when customers place them"}
               </Text>
             </View>
           ) : (
             filteredOrders.map((order) => (
-              <View key={order.id} style={styles.orderCard}>
-                {/* Customer Info */}
-                <View style={styles.orderHeader}>
-                  <View style={styles.customerInfo}>
-                    <View style={styles.avatar}>
-                      <Text style={styles.avatarText}>
-                        {getInitials(order.customerName)}
-                      </Text>
-                    </View>
-                    <View>
-                      <Text style={styles.customerName}>
-                        {order.customerName}
-                      </Text>
-                      <Text style={styles.orderId}>{order.orderId}</Text>
-                    </View>
-                  </View>
-                  <View
-                    style={[
-                      styles.statusBadge,
-                      order.status === "pending" && { backgroundColor: "#000" },
-                      order.status === "ready" && {
-                        backgroundColor: colors.primary,
-                      },
-                      order.status === "completed" && {
-                        backgroundColor: colors.textSoft,
-                      },
-                    ]}
-                  >
-                    <Clock size={12} color="#fff" />
-                    <Text style={styles.statusText}>
-                      {order.status.charAt(0).toUpperCase() +
-                        order.status.slice(1)}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Order Details */}
-                <View style={styles.orderDetails}>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Mystery Bag:</Text>
-                    <Text style={styles.detailValue}>{order.mysteryBag}</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Price:</Text>
-                    <Text
-                      style={[styles.detailValue, { color: colors.primary }]}
-                    >
-                      RM{order.total.toFixed(2)}
-                    </Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Pickup Time:</Text>
-                    <Text style={styles.detailValue}>{order.pickupTime}</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Text style={styles.detailLabel}>Ordered:</Text>
-                    <Text style={styles.detailValue}>
-                      {order.createdAt
-                        ? new Date(order.createdAt.toDate()).toLocaleTimeString(
-                            "en-US",
-                            {
-                              hour: "numeric",
-                              minute: "2-digit",
-                              hour12: true,
-                            },
-                          )
-                        : "N/A"}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Phone */}
-                <View style={styles.phoneContainer}>
-                  <Phone size={16} color={colors.textSoft} />
-                  <Text style={styles.phoneText}>{order.customerPhone}</Text>
-                </View>
-
-                {/* Actions */}
-                {order.status === "pending" && (
-                  <View style={styles.actionButtons}>
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.primaryButton]}
-                      onPress={() => handleMarkAsReady(order.id!)}
-                    >
-                      <Text style={styles.primaryButtonText}>
-                        Mark as Ready
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.secondaryButton]}
-                      onPress={() => handleCancelOrder(order.id!)}
-                    >
-                      <Text style={styles.secondaryButtonText}>
-                        Cancel Order
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-              </View>
+              <OrderCard
+                key={order.id}
+                order={order}
+                onMarkReady={() => handleMarkAsReady(order.id!)}
+                onCancel={() => handleCancelOrder(order.id!)}
+              />
             ))
           )}
         </View>
@@ -422,233 +483,378 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  loadingWrap: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  loadingText: {
+    fontSize: 15,
+    color: colors.textSoft,
+    fontWeight: "500",
+  },
   header: {
     backgroundColor: colors.primary,
-    padding: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl + 8,
+    paddingHorizontal: spacing.lg,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    overflow: "hidden",
+  },
+  headerDecor: {
+    position: "absolute",
+    top: -40,
+    right: -30,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  headerContent: {
+    zIndex: 1,
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 26,
+    fontWeight: "800",
     color: colors.white,
+    letterSpacing: -0.5,
     marginBottom: 4,
   },
   headerSubtitle: {
     fontSize: 14,
-    color: "rgba(255, 255, 255, 0.9)",
+    color: "rgba(255,255,255,0.8)",
+    fontWeight: "500",
   },
-  searchContainer: {
+  body: {
+    marginTop: -spacing.lg,
+    paddingHorizontal: spacing.lg,
+  },
+  searchBar: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 14,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    margin: spacing.lg,
+    paddingVertical: 12,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.border,
-  },
-  searchIcon: {
-    marginRight: spacing.sm,
+    borderColor: "rgba(106, 60, 0, 0.08)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
   searchInput: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 15,
     color: colors.text,
+    padding: 0,
   },
-  statsContainer: {
+  statsRow: {
     flexDirection: "row",
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-    gap: spacing.md,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
   },
   statCard: {
     flex: 1,
     backgroundColor: colors.white,
-    borderRadius: 8,
-    padding: spacing.lg,
+    borderRadius: 16,
+    padding: spacing.md,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "rgba(0,0,0,0.04)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  statNumber: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.text,
-    marginBottom: 4,
+  statCardPending: {
+    borderTopWidth: 3,
+    borderTopColor: colors.text,
   },
-  statLabel: {
-    fontSize: 10,
-    color: colors.textSoft,
+  statCardReady: {
+    borderTopWidth: 3,
+    borderTopColor: colors.primary,
   },
-  filterContainer: {
-    flexDirection: "row",
-    paddingHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-    gap: spacing.sm,
+  statCardDone: {
+    borderTopWidth: 3,
+    borderTopColor: colors.success,
   },
-  filterTab: {
-    flex: 1,
-    flexDirection: "row",
+  statIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.text,
-    gap: 4,
+    marginBottom: 6,
   },
-  filterTabActive: {
-    backgroundColor: colors.white,
-  },
-  filterText: {
-    fontSize: 10,
+  statNumber: {
+    fontSize: 22,
+    fontWeight: "800",
     color: colors.text,
-    fontWeight: "500",
+    marginBottom: 2,
   },
-  filterTextActive: {
+  statLabel: {
+    fontSize: 11,
+    color: colors.textSoft,
     fontWeight: "600",
   },
-  filterBadge: {
-    backgroundColor: colors.text,
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    minWidth: 20,
+  filterScroll: {
+    gap: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+  filterChip: {
+    flexDirection: "row",
     alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 6,
   },
-  filterBadgeText: {
-    fontSize: 10,
-    color: colors.white,
+  filterChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  filterChipText: {
+    fontSize: 14,
     fontWeight: "600",
+    color: colors.text,
   },
-  ordersContainer: {
-    paddingHorizontal: spacing.lg,
+  filterChipTextActive: {
+    color: colors.white,
+  },
+  filterCount: {
+    backgroundColor: "rgba(0,0,0,0.08)",
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  filterCountActive: {
+    backgroundColor: "rgba(255,255,255,0.25)",
+  },
+  filterCountText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textSoft,
+  },
+  filterCountTextActive: {
+    color: colors.white,
   },
   orderCard: {
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 18,
     padding: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "rgba(0,0,0,0.05)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  orderHeader: {
+  orderCardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: spacing.md,
   },
-  customerInfo: {
+  customerRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
+    flex: 1,
+    marginRight: spacing.sm,
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     backgroundColor: colors.primary,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
   },
   avatarText: {
-    fontSize: 14,
-    fontWeight: "600",
+    fontSize: 15,
+    fontWeight: "700",
     color: colors.white,
+  },
+  customerMeta: {
+    flex: 1,
+    minWidth: 0,
   },
   customerName: {
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.text,
+    marginBottom: 2,
   },
   orderId: {
     fontSize: 12,
     color: colors.textSoft,
+    fontWeight: "500",
   },
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
   },
   statusText: {
-    fontSize: 12,
-    color: colors.white,
-    fontWeight: "600",
+    fontSize: 11,
+    fontWeight: "700",
   },
-  orderDetails: {
-    marginBottom: spacing.md,
-  },
-  detailRow: {
+  orderItemRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: colors.primarySoft,
+    borderRadius: 12,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  orderItemIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  orderItemInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  orderItemLabel: {
+    fontSize: 11,
+    color: colors.textSoft,
+    fontWeight: "600",
+    marginBottom: 2,
+  },
+  orderItemName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  orderTotal: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  orderMetaGrid: {
+    flexDirection: "row",
+    backgroundColor: colors.backgroundSoft,
+    borderRadius: 12,
+    padding: spacing.sm,
     marginBottom: spacing.sm,
   },
-  detailLabel: {
-    fontSize: 14,
+  metaCell: {
+    flex: 1,
+    alignItems: "center",
+  },
+  metaDivider: {
+    width: 1,
+    backgroundColor: colors.border,
+    marginVertical: 2,
+  },
+  metaLabel: {
+    fontSize: 11,
     color: colors.textSoft,
+    fontWeight: "600",
+    marginBottom: 4,
   },
-  detailValue: {
-    fontSize: 14,
+  metaValue: {
+    fontSize: 13,
+    fontWeight: "700",
     color: colors.text,
-    fontWeight: "500",
   },
-  phoneContainer: {
+  phoneRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    padding: spacing.sm,
-    backgroundColor: colors.backgroundSoft,
-    borderRadius: 8,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   phoneText: {
     fontSize: 14,
     color: colors.text,
+    fontWeight: "500",
   },
-  actionButtons: {
+  actionRow: {
     flexDirection: "row",
     gap: spacing.sm,
+    marginTop: spacing.xs,
   },
-  actionButton: {
+  readyButton: {
     flex: 1,
-    paddingVertical: spacing.sm + 2,
-    borderRadius: 8,
+    flexDirection: "row",
     alignItems: "center",
-  },
-  primaryButton: {
+    justifyContent: "center",
+    gap: 6,
     backgroundColor: colors.primary,
+    paddingVertical: 12,
+    borderRadius: 12,
   },
-  primaryButtonText: {
+  readyButtonText: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.white,
   },
-  secondaryButton: {
+  cancelButton: {
+    paddingVertical: 12,
+    paddingHorizontal: spacing.lg,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.white,
+    justifyContent: "center",
   },
-  secondaryButtonText: {
+  cancelButtonText: {
     fontSize: 14,
     fontWeight: "600",
-    color: colors.text,
+    color: colors.textSoft,
   },
   emptyState: {
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    padding: spacing.xl,
     alignItems: "center",
-    paddingVertical: spacing.xl * 2,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderStyle: "dashed",
+    marginTop: spacing.sm,
   },
-  emptyText: {
-    fontSize: 16,
-    fontWeight: "500",
+  emptyIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.md,
+  },
+  emptyTitle: {
+    fontSize: 17,
+    fontWeight: "700",
     color: colors.text,
-    marginBottom: 4,
+    marginBottom: 6,
   },
   emptySubtext: {
     fontSize: 14,
     color: colors.textSoft,
+    textAlign: "center",
+    lineHeight: 20,
   },
 });

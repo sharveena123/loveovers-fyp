@@ -1,33 +1,45 @@
-import { Text } from "@/src/components/StyledText";
+import { Text, TextInput } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
-    getConversation,
-    Message,
-    QUICK_MESSAGES,
-    sendMessage,
-    subscribeToMessages,
+  getConversation,
+  Message,
+  QUICK_MESSAGES,
+  sendMessage,
+  subscribeToMessages,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ArrowLeft, Send } from "lucide-react-native";
+import { ArrowLeft, Send, Zap } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    KeyboardAvoidingView,
-    SafeAreaView,
-    StyleSheet,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
 } from "react-native";
+
+function getInitials(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n.charAt(0).toUpperCase())
+    .join("")
+    .slice(0, 2);
+}
 
 export default function SellerChatDetail() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user, loading: authLoading } = useAuth();
-  const [conversation, setConversation] = useState<any>(null);
+  const [conversation, setConversation] = useState<{
+    buyerName?: string;
+    orderId?: string;
+  } | null>(null);
   const [messages, setMessages] = useState<(Message & { id: string })[]>([]);
   const [messageText, setMessageText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -52,14 +64,11 @@ export default function SellerChatDetail() {
         }
       } catch (error) {
         console.error("Error loading conversation:", error);
-        if (isMounted) {
-          setLoading(false);
-        }
+        if (isMounted) setLoading(false);
       }
     };
 
     loadConversation();
-
     return () => {
       isMounted = false;
     };
@@ -67,20 +76,14 @@ export default function SellerChatDetail() {
 
   useEffect(() => {
     if (!id) return;
-
-    // Subscribe to messages in real-time
-    const unsubscribe = subscribeToMessages(id, (msgs) => {
-      setMessages(msgs);
-    });
-
+    const unsubscribe = subscribeToMessages(id, setMessages);
     return () => {
       if (unsubscribe) unsubscribe();
     };
   }, [id]);
 
-  const handleSendMessage = async (text: string, isQuick: boolean = false) => {
-    if (!text.trim() || !user || !id) {
-    }
+  const handleSendMessage = async (text: string, isQuick = false) => {
+    if (!text.trim() || !user || !id) return;
 
     try {
       setSending(true);
@@ -94,8 +97,6 @@ export default function SellerChatDetail() {
       );
       setMessageText("");
       setShowQuickMessages(false);
-
-      // Scroll to bottom
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
@@ -110,7 +111,9 @@ export default function SellerChatDetail() {
   if (loading || authLoading) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
       </SafeAreaView>
     );
   }
@@ -120,22 +123,16 @@ export default function SellerChatDetail() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
+            onPress={() => router.back()}
             style={styles.backButton}
           >
-            <ArrowLeft size={24} color={colors.white} />
+            <ArrowLeft size={22} color={colors.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Chat</Text>
           <View style={styles.backButton} />
         </View>
-        <View
-          style={{
-            flex: 1,
-            justifyContent: "center",
-            alignItems: "center",
-          }}
-        >
-          <Text>Please log in to chat</Text>
+        <View style={styles.centered}>
+          <Text style={styles.loginPrompt}>Please log in to chat</Text>
         </View>
       </SafeAreaView>
     );
@@ -146,16 +143,38 @@ export default function SellerChatDetail() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView style={styles.container} behavior="padding" enabled>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+      >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
+            onPress={() => router.back()}
             style={styles.backButton}
           >
-            <ArrowLeft size={24} color={colors.white} />
+            <ArrowLeft size={22} color={colors.white} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{otherUserName}</Text>
+          <View style={styles.headerCenter}>
+            <View style={styles.headerAvatar}>
+              <Text style={styles.headerAvatarText}>
+                {getInitials(otherUserName)}
+              </Text>
+            </View>
+            <View>
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                {otherUserName}
+              </Text>
+              {conversation?.orderId ? (
+                <Text style={styles.headerOrder}>
+                  Order #{conversation.orderId.slice(-6)}
+                </Text>
+              ) : (
+                <Text style={styles.headerOrder}>Customer chat</Text>
+              )}
+            </View>
+          </View>
           <View style={styles.backButton} />
         </View>
 
@@ -165,42 +184,47 @@ export default function SellerChatDetail() {
           data={messages}
           keyExtractor={(item, index) => item.id || `msg-${index}`}
           renderItem={({ item }) => {
-            const isOwnMessage = item.senderId === user?.uid;
+            const isOwn = item.senderId === user.uid;
             return (
               <View
-                style={[
-                  styles.messageRow,
-                  isOwnMessage && styles.ownMessageRow,
-                ]}
+                style={[styles.messageRow, isOwn && styles.messageRowOwn]}
               >
                 <View
                   style={[
-                    styles.messageBubble,
-                    isOwnMessage && styles.ownMessageBubble,
+                    styles.bubble,
+                    isOwn ? styles.bubbleOwn : styles.bubbleOther,
                   ]}
                 >
                   <Text
                     style={[
                       styles.messageText,
-                      isOwnMessage && styles.ownMessageText,
+                      isOwn && styles.messageTextOwn,
                     ]}
                   >
                     {item.text}
                   </Text>
                   {item.isQuickMessage && (
-                    <Text
+                    <View
                       style={[
-                        styles.quickBadge,
-                        isOwnMessage && styles.ownQuickBadge,
+                        styles.quickTag,
+                        isOwn && styles.quickTagOwn,
                       ]}
                     >
-                      Quick message
-                    </Text>
+                      <Zap size={10} color={isOwn ? colors.white : colors.primary} />
+                      <Text
+                        style={[
+                          styles.quickTagText,
+                          isOwn && styles.quickTagTextOwn,
+                        ]}
+                      >
+                        Quick reply
+                      </Text>
+                    </View>
                   )}
                   <Text
                     style={[
-                      styles.timestamp,
-                      isOwnMessage && styles.ownTimestamp,
+                      styles.msgTime,
+                      isOwn && styles.msgTimeOwn,
                     ]}
                   >
                     {new Date(
@@ -209,7 +233,7 @@ export default function SellerChatDetail() {
                         ? item.createdAt.seconds * 1000
                         : item.createdAt instanceof Date
                           ? item.createdAt.getTime()
-                          : item.createdAt,
+                          : Date.now(),
                     ).toLocaleTimeString([], {
                       hour: "2-digit",
                       minute: "2-digit",
@@ -219,64 +243,84 @@ export default function SellerChatDetail() {
               </View>
             );
           }}
-          scrollEnabled
-          contentContainerStyle={styles.messagesList}
+          contentContainerStyle={[
+            styles.messagesList,
+            messages.length === 0 && styles.messagesListEmpty,
+          ]}
+          ListEmptyComponent={
+            <View style={styles.noMessages}>
+              <Text style={styles.noMessagesTitle}>Start the conversation</Text>
+              <Text style={styles.noMessagesText}>
+                Send a message or use a quick reply below
+              </Text>
+            </View>
+          }
           onContentSizeChange={() =>
-            flatListRef.current?.scrollToEnd({ animated: true })
+            flatListRef.current?.scrollToEnd({ animated: false })
           }
         />
 
-        {/* Quick Messages */}
+        {/* Quick replies */}
         {showQuickMessages && (
-          <View style={styles.quickMessagesContainer}>
-            <FlatList
-              data={quickMsgs}
-              keyExtractor={(item, idx) => `quick-${idx}`}
-              renderItem={({ item }) => (
+          <View style={styles.quickPanel}>
+            <Text style={styles.quickPanelTitle}>Quick replies</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.quickScroll}
+            >
+              {quickMsgs.map((msg, idx) => (
                 <TouchableOpacity
-                  style={styles.quickMessageButton}
-                  onPress={() => handleSendMessage(item, true)}
+                  key={`quick-${idx}`}
+                  style={styles.quickChip}
+                  onPress={() => handleSendMessage(msg, true)}
+                  activeOpacity={0.85}
                 >
-                  <Text style={styles.quickMessageText}>{item}</Text>
+                  <Text style={styles.quickChipText}>{msg}</Text>
                 </TouchableOpacity>
-              )}
-              scrollEnabled={false}
-            />
+              ))}
+            </ScrollView>
           </View>
         )}
 
-        {/* Input Footer */}
-        <View style={styles.inputFooter}>
+        {/* Input */}
+        <View style={styles.inputBar}>
           <TouchableOpacity
             onPress={() => setShowQuickMessages(!showQuickMessages)}
-            style={styles.quickMessageToggle}
+            style={[
+              styles.quickToggle,
+              showQuickMessages && styles.quickToggleActive,
+            ]}
           >
-            <Text style={styles.quickMessageToggleText}>
-              {showQuickMessages ? "✕" : "⚡"}
-            </Text>
+            <Zap
+              size={18}
+              color={showQuickMessages ? colors.white : colors.primary}
+            />
           </TouchableOpacity>
 
           <TextInput
             style={styles.input}
-            placeholder="Type a message..."
+            placeholder="Type a message…"
             value={messageText}
             onChangeText={setMessageText}
             placeholderTextColor={colors.textSoft}
             multiline
+            maxLength={500}
           />
 
           <TouchableOpacity
             onPress={() => handleSendMessage(messageText)}
             disabled={!messageText.trim() || sending}
             style={[
-              styles.sendButton,
-              (!messageText.trim() || sending) && styles.sendButtonDisabled,
+              styles.sendBtn,
+              (!messageText.trim() || sending) && styles.sendBtnDisabled,
             ]}
           >
-            <Send
-              size={20}
-              color={messageText.trim() ? colors.white : colors.textSoft}
-            />
+            {sending ? (
+              <ActivityIndicator size="small" color={colors.white} />
+            ) : (
+              <Send size={18} color={colors.white} />
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -289,139 +333,230 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  flex: {
+    flex: 1,
+  },
+  loadingWrap: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  centered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  loginPrompt: {
+    fontSize: 15,
+    color: colors.textSoft,
+  },
   header: {
     backgroundColor: colors.primary,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.md,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
   },
   backButton: {
-    width: 40,
-    height: 40,
+    width: 44,
+    height: 44,
     justifyContent: "center",
     alignItems: "center",
   },
-  headerTitle: {
-    fontSize: 20,
+  headerCenter: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minWidth: 0,
+  },
+  headerAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerAvatarText: {
+    fontSize: 14,
     fontWeight: "700",
     color: colors.white,
-    flex: 1,
-    textAlign: "center",
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  headerOrder: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.75)",
+    marginTop: 1,
   },
   messagesList: {
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
+    flexGrow: 1,
+  },
+  messagesListEmpty: {
+    justifyContent: "center",
   },
   messageRow: {
     flexDirection: "row",
-    justifyContent: "flex-start",
-    marginBottom: spacing.md,
-    alignItems: "flex-end",
-  },
-  ownMessageRow: {
-    justifyContent: "flex-end",
-  },
-  messageBubble: {
-    maxWidth: "70%",
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    gap: 4,
-    borderWidth: 2,
-    borderColor: colors.primary,
-  },
-  ownMessageBubble: {
-    backgroundColor: colors.primary,
-    borderWidth: 0,
-  },
-  messageText: {
-    fontSize: 14,
-    color: colors.primary,
-    lineHeight: 20,
-  },
-  ownMessageText: {
-    color: colors.white,
-  },
-  quickBadge: {
-    fontSize: 10,
-    color: colors.textSoft,
-    fontStyle: "italic",
-  },
-  ownQuickBadge: {
-    color: "rgba(255, 255, 255, 0.7)",
-  },
-  timestamp: {
-    fontSize: 11,
-    color: colors.textSoft,
-    marginTop: 2,
-  },
-  ownTimestamp: {
-    color: "rgba(255, 255, 255, 0.7)",
-  },
-  quickMessagesContainer: {
-    backgroundColor: colors.white,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    maxHeight: 200,
-  },
-  quickMessageButton: {
-    backgroundColor: colors.primarySoft,
-    borderRadius: 8,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
     marginBottom: spacing.sm,
   },
-  quickMessageText: {
-    fontSize: 13,
-    color: colors.primary,
-    fontWeight: "500",
+  messageRowOwn: {
+    justifyContent: "flex-end",
   },
-  inputFooter: {
+  bubble: {
+    maxWidth: "78%",
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 4,
+  },
+  bubbleOther: {
+    backgroundColor: colors.white,
+    borderBottomLeftRadius: 4,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+  },
+  bubbleOwn: {
+    backgroundColor: colors.primary,
+    borderBottomRightRadius: 4,
+  },
+  messageText: {
+    fontSize: 15,
+    color: colors.text,
+    lineHeight: 21,
+  },
+  messageTextOwn: {
+    color: colors.white,
+  },
+  quickTag: {
     flexDirection: "row",
-    gap: spacing.md,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    alignItems: "center",
+    gap: 3,
+    alignSelf: "flex-start",
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  quickTagOwn: {
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  quickTagText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  quickTagTextOwn: {
+    color: "rgba(255,255,255,0.9)",
+  },
+  msgTime: {
+    fontSize: 10,
+    color: colors.textSoft,
+    alignSelf: "flex-end",
+    marginTop: 2,
+  },
+  msgTimeOwn: {
+    color: "rgba(255,255,255,0.65)",
+  },
+  noMessages: {
+    alignItems: "center",
+    paddingVertical: spacing.xl,
+  },
+  noMessagesTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 4,
+  },
+  noMessagesText: {
+    fontSize: 14,
+    color: colors.textSoft,
+    textAlign: "center",
+  },
+  quickPanel: {
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    alignItems: "flex-end",
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.sm,
   },
-  quickMessageToggle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  quickPanelTitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textSoft,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+  },
+  quickScroll: {
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  quickChip: {
     backgroundColor: colors.primarySoft,
-    justifyContent: "center",
-    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(106, 60, 0, 0.1)",
+    maxWidth: 260,
   },
-  quickMessageToggleText: {
-    fontSize: 18,
+  quickChipText: {
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: "600",
+  },
+  inputBar: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.white,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  quickToggle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quickToggleActive: {
+    backgroundColor: colors.primary,
   },
   input: {
     flex: 1,
+    minHeight: 42,
+    maxHeight: 100,
+    backgroundColor: colors.background,
+    borderRadius: 22,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: colors.text,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 20,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    maxHeight: 100,
-    fontSize: 14,
-    color: colors.text,
   },
-  sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  sendBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: colors.primary,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
   },
-  sendButtonDisabled: {
-    opacity: 0.5,
+  sendBtnDisabled: {
+    opacity: 0.45,
   },
 });

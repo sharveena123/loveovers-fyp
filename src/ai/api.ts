@@ -2,8 +2,10 @@
 import {
   AssessmentUpdateResponse,
   BatchPredictionResponse,
+  CafeDatasetResponse,
   CafeInfo,
   DatasetAssessment,
+  DatasetRow,
   DayOfWeek,
   PredictionRequest,
   PredictionResponse,
@@ -149,6 +151,70 @@ export const listCafes = async (): Promise<{ cafes: CafeInfo[] }> => {
   return getJson<{ cafes: CafeInfo[] }>("/cafes");
 };
 
-export const getCafeInfo = async (cafeId: string) => {
-  return getJson(`/cafe/${cafeId}`);
+export const getCafeInfo = async (cafeId: string): Promise<CafeInfo> => {
+  return getJson<CafeInfo>(`/cafe/${cafeId}`);
+};
+
+const normalizeDatasetRecords = (payload: unknown): DatasetRow[] => {
+  if (!payload || typeof payload !== "object") return [];
+  const obj = payload as Record<string, unknown>;
+  const raw =
+    obj.records ??
+    obj.data ??
+    obj.rows ??
+    obj.dataset ??
+    (Array.isArray(payload) ? payload : null);
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((row) => row && typeof row === "object") as DatasetRow[];
+};
+
+/** Fetch training CSV rows from the AI backend (tries common paths). */
+export const getCafeDataset = async (
+  cafeId: string,
+): Promise<CafeDatasetResponse | null> => {
+  const paths = [
+    `/cafe/${cafeId}/data`,
+    `/cafe/${cafeId}/records`,
+    `/cafe/${cafeId}/dataset`,
+    `/cafe/${cafeId}/analytics`,
+  ];
+
+  for (const path of paths) {
+    try {
+      const res = await getJson<Record<string, unknown>>(path);
+      const records = normalizeDatasetRecords(res);
+      if (records.length === 0) continue;
+
+      const summary = (res.summary as CafeDatasetResponse["summary"]) ?? {
+        total_rows: records.length,
+        r2: typeof res.r2 === "number" ? res.r2 : undefined,
+      };
+
+      return {
+        cafe_id: String(res.cafe_id ?? cafeId),
+        cafe_name: String(res.cafe_name ?? res.name ?? cafeId),
+        records,
+        summary,
+      };
+    } catch {
+      // try next endpoint
+    }
+  }
+
+  try {
+    const cafe = await getCafeInfo(cafeId);
+    const records = normalizeDatasetRecords(cafe as unknown as Record<string, unknown>);
+    if (records.length > 0) {
+      return {
+        cafe_id: cafe.cafe_id,
+        cafe_name: cafe.cafe_name,
+        records,
+        summary: { total_rows: records.length, r2: cafe.r2 },
+      };
+    }
+  } catch {
+    // no embedded records on cafe info
+  }
+
+  return null;
 };
