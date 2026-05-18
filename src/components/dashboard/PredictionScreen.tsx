@@ -1,15 +1,15 @@
-// src/screens/AdaptivePredictionScreen.tsx
+// src/components/dashboard/PredictionScreen.tsx
 import React, { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { batchPredict, getCafeInfo, predictForCafe } from "../../ai/api";
 import { PredictionResponse } from "../../ai/types";
@@ -29,8 +29,17 @@ const WEATHERS = [
   { label: "🌧️ Rainy", value: "Rainy" },
 ];
 
-export default function AdaptivePredictionScreen({ route }: any) {
-  const [cafeId, setCafeId] = useState(route?.params?.cafeId || "");
+interface PredictionScreenProps {
+  cafeId: string;
+  onModelNotFound?: () => void;
+  onRetrain?: () => void;
+}
+
+export function PredictionScreen({
+  cafeId,
+  onModelNotFound,
+  onRetrain,
+}: PredictionScreenProps) {
   const [cafeName, setCafeName] = useState("");
   const [cafeItems, setCafeItems] = useState<string[]>([]);
 
@@ -58,12 +67,31 @@ export default function AdaptivePredictionScreen({ route }: any) {
       return;
     }
     try {
-      const info = await getCafeInfo(cafeId) as { cafe_name: string; items: string[] };
+      console.log("Loading cafe info for cafeId:", cafeId);
+      const info = (await getCafeInfo(cafeId)) as {
+        cafe_name: string;
+        items: string[];
+      };
+      console.log("Cafe info loaded:", info);
       setCafeName(info.cafe_name);
       setCafeItems(info.items);
       if (info.items.length > 0) setSelectedItem(info.items[0]);
-    } catch (error) {
-      Alert.alert("Error", "Failed to load cafe info");
+    } catch (error: any) {
+      console.error("Failed to load cafe info:", error);
+
+      // Check if it's a 404 error (model not found)
+      if (error?.message?.includes("404") || error?.status === 404) {
+        console.log("Model not found on backend, triggering retrain");
+        Alert.alert(
+          "Model Not Found",
+          "The trained model was not found. Please re-train your model.",
+          [{ text: "OK" }],
+        );
+        // Trigger parent to show upload screen
+        onModelNotFound?.();
+      } else {
+        Alert.alert("Error", `Failed to load cafe info: ${String(error)}`);
+      }
     } finally {
       setLoadingCafe(false);
     }
@@ -141,26 +169,20 @@ export default function AdaptivePredictionScreen({ route }: any) {
     );
   }
 
-  if (!cafeId) {
-    return (
-      <View
-        style={[
-          styles.container,
-          { justifyContent: "center", alignItems: "center" },
-        ]}
-      >
-        <Text style={styles.emptyTitle}>🔮 AI Prediction</Text>
-        <Text style={styles.emptyText}>
-          No cafe model found. Please go to Upload & Train tab first.
-        </Text>
-      </View>
-    );
-  }
-
   return (
     <ScrollView style={styles.container}>
-      <Text style={styles.title}>🔮 {cafeName}</Text>
-      <Text style={styles.subtitle}>AI Surplus Prediction</Text>
+      <View style={styles.headerRow}>
+        <View>
+          <Text style={styles.title}>🔮 {cafeName}</Text>
+          <Text style={styles.subtitle}>AI Surplus Prediction</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.retrainButton}
+          onPress={() => onRetrain?.()}
+        >
+          <Text style={styles.retrainButtonText}>↻ Retrain</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Item Selector */}
       <Text style={styles.label}>Select Item</Text>
@@ -460,8 +482,27 @@ export default function AdaptivePredictionScreen({ route }: any) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16, backgroundColor: "#fff" },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 8,
+  },
   title: { fontSize: 22, fontWeight: "bold", color: "#2C3E50" },
   subtitle: { fontSize: 14, color: "#7F8C8D", marginBottom: 16 },
+  retrainButton: {
+    backgroundColor: "#34495E",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  retrainButtonText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
+  },
   label: {
     fontSize: 14,
     fontWeight: "600",

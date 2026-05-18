@@ -151,7 +151,7 @@ export default function SellerSupport() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />
@@ -176,7 +176,7 @@ export default function SellerSupport() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
           style={styles.backButton}
         >
           <ArrowLeft size={24} color={colors.white} />

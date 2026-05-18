@@ -1,7 +1,5 @@
 import { auth } from "@/src/services/firebase/config";
-import { colors } from "@/src/theme/styles";
-import { router, Tabs } from "expo-router";
-import { Home, MessageSquare, Package, User } from "lucide-react-native";
+import { Stack, router } from "expo-router";
 import { useEffect } from "react";
 
 export default function SellerLayout() {
@@ -16,71 +14,16 @@ export default function SellerLayout() {
   }, []);
 
   return (
-    <Tabs
+    <Stack
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSoft,
-        tabBarStyle: {
-          height: 70,
-          paddingBottom: 10,
-          paddingTop: 5,
-          backgroundColor: "#fff",
-          borderTopColor: colors.border,
-          borderTopWidth: 1,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: "500",
-        },
       }}
     >
-      <Tabs.Screen
-        name="dashboard"
-        options={{
-          title: "Home",
-          tabBarIcon: ({ color, size }) => <Home color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="orders"
-        options={{
-          title: "Orders",
-          tabBarIcon: ({ color, size }) => (
-            <Package color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: "Profile",
-          tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
-        }}
-      />
-      <Tabs.Screen
-        name="sellerchat"
-        options={{
-          title: "Chat",
-          tabBarIcon: ({ color, size }) => (
-            <MessageSquare color={color} size={size} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="support"
-        options={{
-          href: null,
-          title: "",
-        }}
-      />
-      <Tabs.Screen
-        name="chat/[id]"
-        options={{
-          href: null,
-          title: "",
-        }}
-      />
-    </Tabs>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="support" options={{ headerShown: false }} />
+      <Stack.Screen name="edit" options={{ headerShown: false }} />
+      <Stack.Screen name="analytics" options={{ headerShown: false }} />
+      <Stack.Screen name="chat/[id]" options={{ headerShown: false }} />
+    </Stack>
   );
 }

@@ -128,7 +128,7 @@ export default function BuyerCart() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Your Orders</Text>
+          <Text style={styles.headerTitle}>Your Cart</Text>
         </View>
         <View style={styles.emptyState}>
           <View style={styles.emptyIcon}>
@@ -153,7 +153,7 @@ export default function BuyerCart() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Your Orders</Text>
+          <Text style={styles.headerTitle}>Your Cart</Text>
         </View>
         <View style={styles.emptyState}>
           <View style={styles.emptyIcon}>
@@ -178,7 +178,7 @@ export default function BuyerCart() {
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Your Orders</Text>
+        <Text style={styles.headerTitle}>Your Cart</Text>
         <Text style={styles.itemCountText}>
           {cartItems.reduce((sum, item) => sum + item.quantity, 0)} item
           {cartItems.reduce((sum, item) => sum + item.quantity, 0) !== 1

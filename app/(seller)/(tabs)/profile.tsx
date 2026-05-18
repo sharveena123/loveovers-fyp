@@ -1,10 +1,14 @@
-import { Text } from '@/src/components/StyledText'
-import { auth } from '@/src/services/firebase/config'
-import { getProfileStats, ProfileStats } from '@/src/services/firebase/profile'
-import { getUserProfile, SellerProfile, updateSellerSettings } from '@/src/services/firebase/user'
-import { colors, spacing } from '@/src/theme/styles'
-import { router } from 'expo-router'
-import { signOut } from 'firebase/auth'
+import { Text } from "@/src/components/StyledText";
+import { auth } from "@/src/services/firebase/config";
+import { getProfileStats, ProfileStats } from "@/src/services/firebase/profile";
+import {
+  getUserProfile,
+  SellerProfile,
+  updateSellerSettings,
+} from "@/src/services/firebase/user";
+import { colors, spacing } from "@/src/theme/styles";
+import { router } from "expo-router";
+import { signOut } from "firebase/auth";
 import {
   AlertCircle,
   BarChart3,
@@ -20,8 +24,8 @@ import {
   Phone,
   Settings,
   Star,
-} from 'lucide-react-native'
-import { useEffect, useState } from 'react'
+} from "lucide-react-native";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -31,95 +35,101 @@ import {
   Switch,
   TouchableOpacity,
   View,
-} from 'react-native'
+} from "react-native";
 
 export default function ProfileScreen() {
-  const [profile, setProfile] = useState<SellerProfile | null>(null)
-  const [stats, setStats] = useState<ProfileStats | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [profile, setProfile] = useState<SellerProfile | null>(null);
+  const [stats, setStats] = useState<ProfileStats | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadProfile()
-  }, [])
+    loadProfile();
+  }, []);
 
   const loadProfile = async () => {
-    const user = auth.currentUser
+    const user = auth.currentUser;
     if (!user) {
-      router.replace('/(auth)/login')
-      return
+      router.replace("/(auth)/login");
+      return;
     }
 
     try {
       const [userProfile, profileStats] = await Promise.all([
         getUserProfile(user.uid),
         getProfileStats(user.uid),
-      ])
+      ]);
 
-      if (userProfile && userProfile.role === 'seller') {
-        setProfile(userProfile as SellerProfile)
-        setStats(profileStats)
+      if (userProfile && userProfile.role === "seller") {
+        setProfile(userProfile as SellerProfile);
+        setStats(profileStats);
       }
     } catch (error) {
-      console.error('Error loading profile:', error)
+      console.error("Error loading profile:", error);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
-  const handleToggleSetting = async (setting: 'notifications' | 'lowStockAlerts') => {
-  if (!auth.currentUser || !profile) return
+  const handleToggleSetting = async (
+    setting: "notifications" | "lowStockAlerts",
+  ) => {
+    if (!auth.currentUser || !profile) return;
 
-  const currentSettings = profile.settings || {
-    notifications: true,
-    lowStockAlerts: true,
-  }
+    const currentSettings = profile.settings || {
+      notifications: true,
+      lowStockAlerts: true,
+    };
 
-  const newValue = !currentSettings[setting]
-  
-  try {
-    await updateSellerSettings(auth.currentUser.uid, {
-      ...currentSettings,
-      [setting]: newValue,
-    })
-    
-    setProfile({
-      ...profile,
-      settings: {
+    const newValue = !currentSettings[setting];
+
+    try {
+      await updateSellerSettings(auth.currentUser.uid, {
         ...currentSettings,
         [setting]: newValue,
-      },
-    })
-  } catch (error) {
-    console.error('Error updating setting:', error)
-    Alert.alert('Error', 'Failed to update setting')
-  }
-}
+      });
+
+      setProfile({
+        ...profile,
+        settings: {
+          ...currentSettings,
+          [setting]: newValue,
+        },
+      });
+    } catch (error) {
+      console.error("Error updating setting:", error);
+      Alert.alert("Error", "Failed to update setting");
+    }
+  };
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert("Logout", "Are you sure you want to logout?", [
+      { text: "Cancel", style: "cancel" },
       {
-        text: 'Logout',
-        style: 'destructive',
+        text: "Logout",
+        style: "destructive",
         onPress: async () => {
           try {
-            await signOut(auth)
-            router.replace('/(auth)/login')
+            await signOut(auth);
+            router.replace("/(auth)/login");
           } catch (error) {
-            console.error('Logout error:', error)
-            Alert.alert('Error', 'Failed to logout')
+            console.error("Logout error:", error);
+            Alert.alert("Error", "Failed to logout");
           }
         },
       },
-    ])
-  }
+    ]);
+  };
 
   if (loading || !profile || !stats) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator size="large" color={colors.primary} style={styles.loader} />
+        <ActivityIndicator
+          size="large"
+          color={colors.primary}
+          style={styles.loader}
+        />
       </SafeAreaView>
-    )
+    );
   }
 
   return (
@@ -130,12 +140,17 @@ export default function ProfileScreen() {
         <Text style={styles.headerSubtitle}>Manage your cafe settings</Text>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
         {/* Business Card */}
         <View style={styles.businessCard}>
           <View style={styles.businessHeader}>
             <View style={styles.avatarContainer}>
-              <Text style={styles.avatarText}>{profile.businessName.charAt(0).toUpperCase()}</Text>
+              <Text style={styles.avatarText}>
+                {profile.businessName.charAt(0).toUpperCase()}
+              </Text>
               {/* <View style={styles.verifiedBadge}>
                 <Text style={styles.verifiedIcon}>✓</Text>
               </View> */}
@@ -158,44 +173,44 @@ export default function ProfileScreen() {
                 <Text style={styles.infoText}>{profile.email}</Text>
               </View>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.editButton}
-              onPress={() => router.push('/(seller)/sellereditprofile')}
+              onPress={() => router.push("/(seller)/sellereditprofile")}
             >
               <Edit2 size={18} color={colors.primary} />
             </TouchableOpacity>
           </View>
         </View>
 
-{/* Operating Hours */}
-<View style={styles.section}>
-  <View style={styles.sectionHeader}>
-    <Text style={styles.sectionTitle}>Operating Hours</Text>
-    <TouchableOpacity>
-      <Text style={styles.editLink}>Edit</Text>
-    </TouchableOpacity>
-  </View>
-  <View style={styles.hoursCard}>
-    <View style={styles.hourRow}>
-      <Text style={styles.dayText}>Monday - Friday</Text>
-      <Text style={styles.hourText}>
-        {profile.operatingHours?.monday || '7:00 AM - 8:00 PM'}
-      </Text>
-    </View>
-    <View style={styles.hourRow}>
-      <Text style={styles.dayText}>Saturday</Text>
-      <Text style={styles.hourText}>
-        {profile.operatingHours?.saturday || '8:00 AM - 9:00 PM'}
-      </Text>
-    </View>
-    <View style={styles.hourRow}>
-      <Text style={styles.dayText}>Sunday</Text>
-      <Text style={styles.hourText}>
-        {profile.operatingHours?.sunday || '9:00 AM - 6:00 PM'}
-      </Text>
-    </View>
-  </View>
-</View>
+        {/* Operating Hours */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Operating Hours</Text>
+            <TouchableOpacity>
+              <Text style={styles.editLink}>Edit</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.hoursCard}>
+            <View style={styles.hourRow}>
+              <Text style={styles.dayText}>Monday - Friday</Text>
+              <Text style={styles.hourText}>
+                {profile.operatingHours?.monday || "7:00 AM - 8:00 PM"}
+              </Text>
+            </View>
+            <View style={styles.hourRow}>
+              <Text style={styles.dayText}>Saturday</Text>
+              <Text style={styles.hourText}>
+                {profile.operatingHours?.saturday || "8:00 AM - 9:00 PM"}
+              </Text>
+            </View>
+            <View style={styles.hourRow}>
+              <Text style={styles.dayText}>Sunday</Text>
+              <Text style={styles.hourText}>
+                {profile.operatingHours?.sunday || "9:00 AM - 6:00 PM"}
+              </Text>
+            </View>
+          </View>
+        </View>
 
         {/* Performance Stats */}
         <View style={styles.statsGrid}>
@@ -204,63 +219,79 @@ export default function ProfileScreen() {
             <Text style={styles.statLabel}>Total Sales</Text>
           </View>
           <View style={styles.miniStatCard}>
-            <Text style={[styles.statValue, { color: colors.primary }]}>{stats.rating}</Text>
+            <Text style={[styles.statValue, { color: colors.primary }]}>
+              {stats.rating}
+            </Text>
             <Text style={styles.statLabel}>Rating</Text>
           </View>
           <View style={styles.miniStatCard}>
-            <Text style={[styles.statValue, { color: colors.success }]}>{stats.savedPercentage}%</Text>
+            <Text style={[styles.statValue, { color: colors.success }]}>
+              {stats.savedPercentage}%
+            </Text>
             <Text style={styles.statLabel}>Saved</Text>
           </View>
         </View>
 
         {/* Settings */}
-<View style={styles.section}>
-  <Text style={styles.sectionTitle}>Settings</Text>
-  <View style={styles.settingsCard}>
-    <View style={styles.settingRow}>
-      <View style={styles.settingLeft}>
-        <View style={[styles.settingIcon, { backgroundColor: '#FFF5E6' }]}>
-          <Bell size={20} color={colors.primary} />
-        </View>
-        <View>
-          <Text style={styles.settingTitle}>Notifications</Text>
-          <Text style={styles.settingSubtitle}>Order alerts and updates</Text>
-        </View>
-      </View>
-      <Switch
-        value={profile.settings?.notifications ?? true}
-        onValueChange={() => handleToggleSetting('notifications')}
-        trackColor={{ false: '#E5E5E5', true: colors.primary }}
-        thumbColor="#fff"
-      />
-    </View>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Settings</Text>
+          <View style={styles.settingsCard}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingLeft}>
+                <View
+                  style={[styles.settingIcon, { backgroundColor: "#FFF5E6" }]}
+                >
+                  <Bell size={20} color={colors.primary} />
+                </View>
+                <View>
+                  <Text style={styles.settingTitle}>Notifications</Text>
+                  <Text style={styles.settingSubtitle}>
+                    Order alerts and updates
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={profile.settings?.notifications ?? true}
+                onValueChange={() => handleToggleSetting("notifications")}
+                trackColor={{ false: "#E5E5E5", true: colors.primary }}
+                thumbColor="#fff"
+              />
+            </View>
 
-    <View style={styles.settingRow}>
-      <View style={styles.settingLeft}>
-        <View style={[styles.settingIcon, { backgroundColor: '#FFF5E6' }]}>
-          <AlertCircle size={20} color={colors.primary} />
-        </View>
-        <View>
-          <Text style={styles.settingTitle}>Low Stock Alerts</Text>
-          <Text style={styles.settingSubtitle}>Get notified when inventory is low</Text>
-        </View>
-      </View>
-      <Switch
-        value={profile.settings?.lowStockAlerts ?? true}
-        onValueChange={() => handleToggleSetting('lowStockAlerts')}
-        trackColor={{ false: '#E5E5E5', true: colors.primary }}
-        thumbColor="#fff"
-      />
-    </View>
+            <View style={styles.settingRow}>
+              <View style={styles.settingLeft}>
+                <View
+                  style={[styles.settingIcon, { backgroundColor: "#FFF5E6" }]}
+                >
+                  <AlertCircle size={20} color={colors.primary} />
+                </View>
+                <View>
+                  <Text style={styles.settingTitle}>Low Stock Alerts</Text>
+                  <Text style={styles.settingSubtitle}>
+                    Get notified when inventory is low
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={profile.settings?.lowStockAlerts ?? true}
+                onValueChange={() => handleToggleSetting("lowStockAlerts")}
+                trackColor={{ false: "#E5E5E5", true: colors.primary }}
+                thumbColor="#fff"
+              />
+            </View>
 
             <TouchableOpacity style={styles.settingRowClickable}>
               <View style={styles.settingLeft}>
-                <View style={[styles.settingIcon, { backgroundColor: '#F0F0F0' }]}>
+                <View
+                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
+                >
                   <CreditCard size={20} color="#666" />
                 </View>
                 <View>
                   <Text style={styles.settingTitle}>Payment Settings</Text>
-                  <Text style={styles.settingSubtitle}>Manage payout methods</Text>
+                  <Text style={styles.settingSubtitle}>
+                    Manage payout methods
+                  </Text>
                 </View>
               </View>
               <ChevronRight size={20} color={colors.textSoft} />
@@ -268,12 +299,16 @@ export default function ProfileScreen() {
 
             <TouchableOpacity style={styles.settingRowClickable}>
               <View style={styles.settingLeft}>
-                <View style={[styles.settingIcon, { backgroundColor: '#F0F0F0' }]}>
+                <View
+                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
+                >
                   <BarChart3 size={20} color="#666" />
                 </View>
                 <View>
                   <Text style={styles.settingTitle}>Business Analytics</Text>
-                  <Text style={styles.settingSubtitle}>Detailed reports and insights</Text>
+                  <Text style={styles.settingSubtitle}>
+                    Detailed reports and insights
+                  </Text>
                 </View>
               </View>
               <ChevronRight size={20} color={colors.textSoft} />
@@ -287,7 +322,9 @@ export default function ProfileScreen() {
           <View style={styles.settingsCard}>
             <TouchableOpacity style={styles.settingRowClickable}>
               <View style={styles.settingLeft}>
-                <View style={[styles.settingIcon, { backgroundColor: '#F0F0F0' }]}>
+                <View
+                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
+                >
                   <Settings size={20} color="#666" />
                 </View>
                 <Text style={styles.settingTitle}>Account Settings</Text>
@@ -297,7 +334,9 @@ export default function ProfileScreen() {
 
             <TouchableOpacity style={styles.settingRowClickable}>
               <View style={styles.settingLeft}>
-                <View style={[styles.settingIcon, { backgroundColor: '#F0F0F0' }]}>
+                <View
+                  style={[styles.settingIcon, { backgroundColor: "#F0F0F0" }]}
+                >
                   <HelpCircle size={20} color="#666" />
                 </View>
                 <Text style={styles.settingTitle}>Help & Support</Text>
@@ -307,7 +346,9 @@ export default function ProfileScreen() {
 
             <TouchableOpacity style={styles.settingRowClickable}>
               <View style={styles.settingLeft}>
-                <View style={[styles.settingIcon, { backgroundColor: '#E7F1E5' }]}>
+                <View
+                  style={[styles.settingIcon, { backgroundColor: "#E7F1E5" }]}
+                >
                   <Star size={20} color={colors.success} />
                 </View>
                 <View style={{ flex: 1 }}>
@@ -336,7 +377,9 @@ export default function ProfileScreen() {
 
           <View style={styles.impactGrid}>
             <View style={styles.impactCard}>
-              <Text style={styles.impactValue}>{stats.mealsSaved.toLocaleString()}</Text>
+              <Text style={styles.impactValue}>
+                {stats.mealsSaved.toLocaleString()}
+              </Text>
               <Text style={styles.impactLabel}>Meals Saved</Text>
             </View>
             <View style={styles.impactCard}>
@@ -344,11 +387,15 @@ export default function ProfileScreen() {
               <Text style={styles.impactLabel}>CO₂ Reduced</Text>
             </View>
             <View style={styles.impactCard}>
-              <Text style={styles.impactValue}>RM {(stats.revenueSaved / 1000).toFixed(1)}K</Text>
+              <Text style={styles.impactValue}>
+                RM {(stats.revenueSaved / 1000).toFixed(1)}K
+              </Text>
               <Text style={styles.impactLabel}>Revenue Saved</Text>
             </View>
             <View style={styles.impactCard}>
-              <Text style={[styles.impactValue, { color: colors.error }]}>{stats.wasteDown}%</Text>
+              <Text style={[styles.impactValue, { color: colors.error }]}>
+                {stats.wasteDown}%
+              </Text>
               <Text style={styles.impactLabel}>Waste Down</Text>
             </View>
           </View>
@@ -366,7 +413,7 @@ export default function ProfileScreen() {
         <View style={{ height: 50 }} />
       </ScrollView>
     </SafeAreaView>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
@@ -376,7 +423,7 @@ const styles = StyleSheet.create({
   },
   loader: {
     flex: 1,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   header: {
     backgroundColor: colors.primary,
@@ -384,13 +431,13 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 24,
-    fontWeight: '700',
+    fontWeight: "700",
     color: colors.white,
     marginBottom: 4,
   },
   headerSubtitle: {
     fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: "rgba(255, 255, 255, 0.9)",
   },
   scrollContent: {
     padding: spacing.lg,
@@ -402,11 +449,11 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   businessHeader: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: spacing.md,
   },
   avatarContainer: {
-    position: 'relative',
+    position: "relative",
   },
   avatarText: {
     width: 56,
@@ -414,40 +461,40 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     backgroundColor: colors.primary,
     fontSize: 24,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.white,
-    textAlign: 'center',
+    textAlign: "center",
     lineHeight: 56,
   },
   verifiedBadge: {
-    position: 'absolute',
+    position: "absolute",
     bottom: 0,
     right: 0,
     width: 20,
     height: 20,
     borderRadius: 10,
     backgroundColor: colors.success,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
     borderWidth: 2,
     borderColor: colors.white,
   },
   verifiedIcon: {
     color: colors.white,
     fontSize: 12,
-    fontWeight: 'bold',
+    fontWeight: "bold",
   },
   businessInfo: {
     flex: 1,
   },
   businessName: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.text,
     marginBottom: 4,
   },
   tierBadge: {
-    alignSelf: 'flex-start',
+    alignSelf: "flex-start",
     backgroundColor: colors.primarySoft,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
@@ -456,12 +503,12 @@ const styles = StyleSheet.create({
   },
   tierText: {
     fontSize: 10,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.primary,
   },
   infoRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 6,
     marginBottom: 4,
   },
@@ -476,20 +523,20 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: spacing.sm,
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.text,
   },
   editLink: {
     fontSize: 14,
     color: colors.primary,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   hoursCard: {
     backgroundColor: colors.white,
@@ -497,8 +544,8 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   hourRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    justifyContent: "space-between",
     paddingVertical: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
@@ -510,10 +557,10 @@ const styles = StyleSheet.create({
   hourText: {
     fontSize: 14,
     color: colors.textSoft,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   statsGrid: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
@@ -522,11 +569,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderRadius: 12,
     padding: spacing.md,
-    alignItems: 'center',
+    alignItems: "center",
   },
   statValue: {
     fontSize: 24,
-    fontWeight: '700',
+    fontWeight: "700",
     color: colors.text,
     marginBottom: 4,
   },
@@ -537,26 +584,26 @@ const styles = StyleSheet.create({
   settingsCard: {
     backgroundColor: colors.white,
     borderRadius: 12,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   settingRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     padding: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   settingRowClickable: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     padding: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
   settingLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     flex: 1,
     gap: spacing.md,
   },
@@ -564,12 +611,12 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
   },
   settingTitle: {
     fontSize: 15,
-    fontWeight: '500',
+    fontWeight: "500",
     color: colors.text,
   },
   settingSubtitle: {
@@ -586,7 +633,7 @@ const styles = StyleSheet.create({
   },
   premiumText: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.success,
   },
   impactSection: {
@@ -596,8 +643,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   impactHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: spacing.sm,
     marginBottom: spacing.lg,
   },
@@ -606,12 +653,12 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
     backgroundColor: colors.white,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
   },
   impactTitle: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.text,
   },
   impactSubtitle: {
@@ -619,20 +666,20 @@ const styles = StyleSheet.create({
     color: colors.textSoft,
   },
   impactGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: spacing.md,
   },
   impactCard: {
-    width: '47%',
+    width: "47%",
     backgroundColor: colors.white,
     borderRadius: 12,
     padding: spacing.md,
-    alignItems: 'center',
+    alignItems: "center",
   },
   impactValue: {
     fontSize: 28,
-    fontWeight: '700',
+    fontWeight: "700",
     color: colors.text,
     marginBottom: 4,
   },
@@ -641,9 +688,9 @@ const styles = StyleSheet.create({
     color: colors.textSoft,
   },
   logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
     gap: spacing.sm,
     backgroundColor: colors.white,
     borderRadius: 12,
@@ -654,13 +701,13 @@ const styles = StyleSheet.create({
   },
   logoutText: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.error,
   },
   footer: {
     fontSize: 12,
     color: colors.textSoft,
-    textAlign: 'center',
+    textAlign: "center",
     marginTop: spacing.sm,
   },
-})
+});

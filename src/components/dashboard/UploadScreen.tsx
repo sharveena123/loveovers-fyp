@@ -1,24 +1,25 @@
-// src/screens/UploadAndTrainScreen.tsx - HYBRID VERSION
 import * as DocumentPicker from "expo-document-picker";
 import React, { useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { assessDataset, trainModel } from "../../ai/api";
-import {
-    DatasetAssessment,
-    NeedsConfirmation,
-    TrainingResult,
-} from "../../ai/types";
+import { DatasetAssessment, TrainingResult } from "../../ai/types";
 
-export default function UploadAndTrainScreen() {
+interface UploadAndTrainScreenProps {
+  onTrainingComplete?: (cafeId: string) => void;
+}
+
+export function UploadAndTrainScreen({
+  onTrainingComplete,
+}: UploadAndTrainScreenProps) {
   const [file, setFile] = useState<any>(null);
   const [cafeName, setCafeName] = useState("");
   const [assessment, setAssessment] = useState<DatasetAssessment | null>(null);
@@ -27,10 +28,10 @@ export default function UploadAndTrainScreen() {
   );
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<
-    "upload" | "assess" | "confirm" | "train" | "done"
+    "upload" | "assessing" | "review" | "training" | "done"
   >("upload");
 
-  // Layer 3: User corrections
+  // User corrections (v4.2 — derived from editable_mapping)
   const [userCorrections, setUserCorrections] = useState<
     Record<string, string>
   >({});
@@ -58,33 +59,30 @@ export default function UploadAndTrainScreen() {
 
     try {
       setLoading(true);
+      setStep("assessing");
       const result = await assessDataset(
         file.uri,
         file.name,
         cafeName || "My Cafe",
       );
       setAssessment(result);
+      setStep("review");
 
-      if (result.needs_confirmation.length > 0) {
-        setStep("confirm");
-      } else {
-        setStep(result.usable ? "train" : "assess");
+      // v4.2: Initialize userCorrections from editable_mapping
+      const initialCorrections: Record<string, string> = {};
+      for (const entry of result.editable_mapping || []) {
+        initialCorrections[entry.original_column] = entry.current_mapping;
       }
-
-      if (!result.usable && result.needs_confirmation.length === 0) {
-        Alert.alert(
-          "Dataset Issues",
-          `Missing required: ${result.missing_required.join(", ")}`,
-        );
-      }
-    } catch (error) {
+      setUserCorrections(initialCorrections);
+    } catch (error: any) {
       Alert.alert("Assessment Failed", String(error));
+      setStep("upload");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCorrectionChange = (column: string, standard: string) => {
+  const handleMappingChange = (column: string, standard: string) => {
     setUserCorrections((prev) => ({
       ...prev,
       [column]: standard,
@@ -96,27 +94,39 @@ export default function UploadAndTrainScreen() {
       Alert.alert("Cannot Train", "Please fix dataset issues first.");
       return;
     }
+    if (!assessment.assessment_id) {
+      Alert.alert("Error", "No assessment ID found.");
+      return;
+    }
 
     try {
       setLoading(true);
+      setStep("training");
+
+      // v4.2 path only — always use assessment_id with Ollama backend
       const result = await trainModel(
         file.uri,
         file.name,
         cafeName || "My Cafe",
-        undefined,
-        Object.keys(userCorrections).length > 0 ? userCorrections : undefined,
+        assessment.assessment_id,
       );
+
       setTrainingResult(result);
       setStep("done");
 
       Alert.alert(
-        "Training Complete!",
+        "Training Complete! 🎉",
         `Model trained for ${result.cafe_name}\n` +
           `Items: ${result.items.length}\n` +
           `Accuracy: ${(result.r2 * 100).toFixed(1)}%`,
       );
-    } catch (error) {
+
+      if (onTrainingComplete) {
+        onTrainingComplete(result.cafe_id);
+      }
+    } catch (error: any) {
       Alert.alert("Training Failed", String(error));
+      setStep("review");
     } finally {
       setLoading(false);
     }
@@ -135,18 +145,34 @@ export default function UploadAndTrainScreen() {
     }
   };
 
-  const getConfidenceIcon = (confidence: string) => {
-    switch (confidence) {
-      case "high":
-        return "✅";
-      case "medium":
-        return "⚠️";
-      case "low":
-        return "❌";
+  const getSourceIcon = (source: string) => {
+    switch (source) {
+      case "rule":
+        return "📋";
+      case "llm":
+        return "🤖";
+      case "unmapped":
+        return "❓";
       default:
         return "❓";
     }
   };
+
+  const getSourceLabel = (source: string) => {
+    switch (source) {
+      case "rule":
+        return "Rule-based";
+      case "llm":
+        return "AI (Ollama)";
+      case "unmapped":
+        return "Needs You";
+      default:
+        return "Unknown";
+    }
+  };
+
+  // v4.2: editable_mapping is always present from Ollama backend
+  const editableMapping = assessment?.editable_mapping || [];
 
   return (
     <ScrollView style={styles.container}>
@@ -173,15 +199,21 @@ export default function UploadAndTrainScreen() {
         </TouchableOpacity>
 
         {file && (
-          <TouchableOpacity style={styles.actionButton} onPress={handleAssess}>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={handleAssess}
+            disabled={loading}
+          >
             <Text style={styles.actionButtonText}>
-              {loading ? "Analyzing..." : "🔍 AI Assess Dataset"}
+              {loading && step === "assessing"
+                ? "Analyzing with AI..."
+                : "🔍 AI Assess Dataset"}
             </Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Step 2: Assessment Results */}
+      {/* Step 2: Review AI Assessment */}
       {assessment && (
         <View
           style={[
@@ -191,10 +223,14 @@ export default function UploadAndTrainScreen() {
         >
           <Text style={styles.stepTitle}>
             Step 2: AI Assessment Result{" "}
-            {getConfidenceIcon(assessment.confidence)}
+            {assessment.confidence === "high"
+              ? "✅"
+              : assessment.confidence === "medium"
+                ? "⚠️"
+                : "❌"}
           </Text>
 
-          {/* Confidence Score */}
+          {/* Confidence Badge */}
           <View
             style={[
               styles.confidenceBadge,
@@ -206,6 +242,18 @@ export default function UploadAndTrainScreen() {
             </Text>
           </View>
 
+          {/* AI Engine Badge */}
+          {assessment.ai_engine && (
+            <View style={styles.engineBadge}>
+              <Text style={styles.engineBadgeText}>
+                🤖 Engine:{" "}
+                {assessment.ai_engine === "ollama"
+                  ? "Ollama (Local)"
+                  : "Rule-based Only"}
+              </Text>
+            </View>
+          )}
+
           {/* Layer Breakdown */}
           <View style={styles.layerBox}>
             <Text style={styles.layerTitle}>
@@ -214,128 +262,142 @@ export default function UploadAndTrainScreen() {
             <View style={styles.layerRow}>
               <View style={styles.layerItem}>
                 <Text style={styles.layerNumber}>
-                  {assessment.layer_breakdown.rule_based_mapped}
+                  {assessment.layer_breakdown?.rule_based_mapped || 0}
                 </Text>
                 <Text style={styles.layerLabel}>Rule-Based</Text>
               </View>
               <View style={styles.layerItem}>
                 <Text style={styles.layerNumber}>
-                  {assessment.layer_breakdown.llm_mapped}
+                  {assessment.layer_breakdown?.llm_mapped || 0}
                 </Text>
-                <Text style={styles.layerLabel}>AI (Gemini)</Text>
+                <Text style={styles.layerLabel}>AI (Ollama)</Text>
               </View>
               <View style={styles.layerItem}>
                 <Text style={styles.layerNumber}>
-                  {assessment.layer_breakdown.needs_confirmation}
+                  {assessment.layer_breakdown?.needs_confirmation || 0}
                 </Text>
                 <Text style={styles.layerLabel}>Need You</Text>
               </View>
             </View>
+
+            {/* Diagnostic Info */}
+            {assessment.diagnostic && (
+              <View style={styles.diagnosticBox}>
+                <Text style={styles.diagnosticText}>
+                  {assessment.diagnostic}
+                </Text>
+              </View>
+            )}
           </View>
 
-          {/* Detected Mappings */}
-          <Text style={styles.sectionTitle}>✅ Auto-Detected Columns:</Text>
-          {Object.entries(assessment.detected_mapping).map(
-            ([standard, original]) => (
-              <View key={standard} style={styles.mappingRow}>
-                <Text style={styles.mappingOriginal}>{original}</Text>
-                <Text style={styles.mappingArrow}>→</Text>
-                <Text style={styles.mappingStandard}>{standard}</Text>
-              </View>
-            ),
-          )}
+          {/* Editable Mapping Table */}
+          <Text style={styles.sectionTitle}>
+            📝 Review & Edit Column Mappings:
+          </Text>
+          <Text style={styles.editHint}>
+            Tap any dropdown to change the mapping.
+          </Text>
 
-          {/* LLM-Assisted Mappings */}
-          {Object.keys(assessment.llm_assisted_mapping).length > 0 && (
-            <>
-              <Text style={[styles.sectionTitle, { color: "#9B59B6" }]}>
-                🤖 AI-Assisted Columns:
-              </Text>
-              {Object.entries(assessment.llm_assisted_mapping).map(
-                ([col, standard]) => (
-                  <View
-                    key={col}
-                    style={[styles.mappingRow, { backgroundColor: "#F3E5F5" }]}
-                  >
-                    <Text style={styles.mappingOriginal}>{col}</Text>
-                    <Text style={styles.mappingArrow}>→</Text>
-                    <Text
-                      style={[styles.mappingStandard, { color: "#9B59B6" }]}
-                    >
-                      {standard}
+          {editableMapping.map((entry) => {
+            const currentValue =
+              userCorrections[entry.original_column] || entry.current_mapping;
+            const isModified =
+              userCorrections[entry.original_column] !== undefined &&
+              userCorrections[entry.original_column] !==
+                entry.ai_suggested_mapping;
+
+            return (
+              <View
+                key={entry.original_column}
+                style={[
+                  styles.mappingCard,
+                  entry.source === "llm" && styles.mappingCardLLM,
+                  entry.source === "unmapped" && styles.mappingCardUnmapped,
+                  isModified && styles.mappingCardModified,
+                ]}
+              >
+                <View style={styles.mappingHeader}>
+                  <Text style={styles.mappingColumn}>
+                    {entry.original_column}
+                  </Text>
+                  <View style={styles.sourceBadge}>
+                    <Text style={styles.sourceBadgeText}>
+                      {getSourceIcon(entry.source)}{" "}
+                      {getSourceLabel(entry.source)}
                     </Text>
-                    <Text style={styles.llmBadge}>AI</Text>
                   </View>
+                </View>
+
+                <Text style={styles.mappingCurrent}>
+                  Maps to:{" "}
+                  <Text style={{ fontWeight: "bold", color: "#2C3E50" }}>
+                    {currentValue}
+                  </Text>
+                  {isModified && (
+                    <Text style={styles.modifiedTag}> (edited by you)</Text>
+                  )}
+                </Text>
+
+                <View style={styles.optionsRow}>
+                  {(
+                    entry.options || [
+                      "date",
+                      "item",
+                      "sold_qty",
+                      "produced_qty",
+                      "price",
+                      "discount_pct",
+                      "weather",
+                      "day_of_week",
+                      "unknown",
+                    ]
+                  ).map((option) => (
+                    <TouchableOpacity
+                      key={option}
+                      style={[
+                        styles.optionChip,
+                        currentValue === option && styles.optionChipSelected,
+                      ]}
+                      onPress={() =>
+                        handleMappingChange(entry.original_column, option)
+                      }
+                    >
+                      <Text
+                        style={[
+                          styles.optionChipText,
+                          currentValue === option &&
+                            styles.optionChipTextSelected,
+                        ]}
+                      >
+                        {option}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            );
+          })}
+
+          {/* Issues */}
+          {(assessment.data_quality_issues || []).length > 0 && (
+            <>
+              <Text style={[styles.sectionTitle, { color: "#E74C3C" }]}>
+                ⚠️ Data Quality Issues:
+              </Text>
+              {(assessment.data_quality_issues || []).map(
+                (issue: string, i: number) => (
+                  <Text key={i} style={styles.issueText}>
+                    • {issue}
+                  </Text>
                 ),
               )}
             </>
           )}
 
-          {/* Needs Confirmation */}
-          {assessment.needs_confirmation.length > 0 && (
-            <>
-              <Text style={[styles.sectionTitle, { color: "#E74C3C" }]}>
-                ❓ Needs Your Confirmation:
-              </Text>
-              {assessment.needs_confirmation.map((item: NeedsConfirmation) => (
-                <View key={item.column} style={styles.confirmationCard}>
-                  <Text style={styles.confirmationColumn}>{item.column}</Text>
-                  <Text style={styles.confirmationSuggest}>
-                    AI suggests:{" "}
-                    <Text style={{ fontWeight: "bold" }}>
-                      {item.suggested_mapping}
-                    </Text>
-                  </Text>
-                  <View style={styles.pickerRow}>
-                    {item.options.map((option) => (
-                      <TouchableOpacity
-                        key={option}
-                        style={[
-                          styles.optionChip,
-                          (userCorrections[item.column] ||
-                            item.suggested_mapping) === option &&
-                            styles.optionChipSelected,
-                        ]}
-                        onPress={() =>
-                          handleCorrectionChange(item.column, option)
-                        }
-                      >
-                        <Text
-                          style={[
-                            styles.optionChipText,
-                            (userCorrections[item.column] ||
-                              item.suggested_mapping) === option &&
-                              styles.optionChipTextSelected,
-                          ]}
-                        >
-                          {option}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                </View>
-              ))}
-            </>
-          )}
-
-          {/* Issues & Suggestions */}
-          {assessment.data_quality_issues.length > 0 && (
-            <>
-              <Text style={[styles.sectionTitle, { color: "#E74C3C" }]}>
-                ⚠️ Data Quality Issues:
-              </Text>
-              {assessment.data_quality_issues.map((issue, i) => (
-                <Text key={i} style={styles.issueText}>
-                  • {issue}
-                </Text>
-              ))}
-            </>
-          )}
-
-          {assessment.suggestions.length > 0 && (
+          {(assessment.suggestions || []).length > 0 && (
             <>
               <Text style={styles.sectionTitle}>💡 AI Suggestions:</Text>
-              {assessment.suggestions.map((s, i) => (
+              {(assessment.suggestions || []).map((s: string, i: number) => (
                 <Text key={i} style={styles.suggestionText}>
                   • {s}
                 </Text>
@@ -343,24 +405,43 @@ export default function UploadAndTrainScreen() {
             </>
           )}
 
-          {/* Train Button */}
-          {assessment.usable && (
-            <TouchableOpacity
-              style={[
-                styles.actionButton,
-                { backgroundColor: "#27AE60", marginTop: 16 },
-              ]}
-              onPress={handleTrain}
-            >
-              <Text style={styles.actionButtonText}>
-                {loading ? "Training..." : "🚀 Train AI Model"}
+          {/* Missing Required Warning */}
+          {(assessment.missing_required || []).length > 0 && (
+            <View style={styles.warningBox}>
+              <Text style={styles.warningText}>
+                ❌ Missing required:{" "}
+                {(assessment.missing_required || []).join(", ")}
               </Text>
-            </TouchableOpacity>
+              <Text style={styles.warningSub}>
+                Please map these above before training.
+              </Text>
+            </View>
           )}
+
+          {/* Train Button */}
+          <TouchableOpacity
+            style={[
+              styles.actionButton,
+              {
+                backgroundColor: assessment.usable ? "#27AE60" : "#BDC3C7",
+                marginTop: 16,
+              },
+            ]}
+            onPress={handleTrain}
+            disabled={!assessment.usable || loading}
+          >
+            <Text style={styles.actionButtonText}>
+              {loading && step === "training"
+                ? "Training XGBoost Model..."
+                : assessment.usable
+                  ? "🚀 Train AI Model"
+                  : "🔧 Fix Mappings to Train"}
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
 
-      {/* Step 3: Training Complete */}
+      {/* Step 3: Done */}
       {trainingResult && (
         <View style={[styles.stepBox, { borderColor: "#3498DB" }]}>
           <Text style={styles.stepTitle}>Step 3: Training Complete! 🎉</Text>
@@ -467,7 +548,6 @@ const styles = StyleSheet.create({
   },
   actionButtonText: { color: "#fff", fontWeight: "bold", fontSize: 15 },
 
-  // Confidence Badge
   confidenceBadge: {
     alignSelf: "center",
     paddingHorizontal: 16,
@@ -477,7 +557,18 @@ const styles = StyleSheet.create({
   },
   confidenceText: { color: "#fff", fontWeight: "bold", fontSize: 12 },
 
-  // Layer Breakdown
+  engineBadge: {
+    alignSelf: "center",
+    backgroundColor: "#E3F2FD",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#2196F3",
+  },
+  engineBadgeText: { color: "#1565C0", fontWeight: "600", fontSize: 12 },
+
   layerBox: {
     backgroundColor: "#fff",
     padding: 12,
@@ -495,7 +586,6 @@ const styles = StyleSheet.create({
   layerNumber: { fontSize: 20, fontWeight: "bold", color: "#3498DB" },
   layerLabel: { fontSize: 11, color: "#7F8C8D", marginTop: 2 },
 
-  // Mappings
   sectionTitle: {
     fontSize: 13,
     fontWeight: "bold",
@@ -503,49 +593,51 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 6,
   },
-  mappingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 8,
-    backgroundColor: "#E8F5E9",
-    borderRadius: 6,
-    marginBottom: 4,
-  },
-  mappingOriginal: { fontSize: 12, color: "#2C3E50", flex: 1 },
-  mappingArrow: { fontSize: 12, color: "#7F8C8D", marginHorizontal: 8 },
-  mappingStandard: {
+  editHint: {
     fontSize: 12,
-    fontWeight: "bold",
-    color: "#27AE60",
-    flex: 1,
-  },
-  llmBadge: {
-    backgroundColor: "#9B59B6",
-    color: "#fff",
-    fontSize: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    fontWeight: "bold",
+    color: "#F39C12",
+    fontStyle: "italic",
+    marginBottom: 12,
   },
 
-  // Confirmation
-  confirmationCard: {
-    backgroundColor: "#FFF3E0",
+  mappingCard: {
+    backgroundColor: "#fff",
     padding: 12,
     borderRadius: 8,
     marginBottom: 8,
     borderLeftWidth: 3,
+    borderLeftColor: "#3498DB",
+  },
+  mappingCardLLM: {
+    borderLeftColor: "#9B59B6",
+    backgroundColor: "#F3E5F5",
+  },
+  mappingCardUnmapped: {
     borderLeftColor: "#F39C12",
+    backgroundColor: "#FFF8E1",
   },
-  confirmationColumn: { fontSize: 14, fontWeight: "bold", color: "#2C3E50" },
-  confirmationSuggest: {
-    fontSize: 12,
-    color: "#7F8C8D",
-    marginTop: 2,
-    marginBottom: 8,
+  mappingCardModified: {
+    borderLeftColor: "#27AE60",
+    backgroundColor: "#E8F5E9",
   },
-  pickerRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  mappingHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  mappingColumn: { fontSize: 14, fontWeight: "bold", color: "#2C3E50" },
+  sourceBadge: {
+    backgroundColor: "#ECF0F1",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  sourceBadgeText: { fontSize: 11, color: "#2C3E50" },
+  mappingCurrent: { fontSize: 12, color: "#7F8C8D", marginBottom: 8 },
+  modifiedTag: { color: "#27AE60", fontWeight: "bold" },
+
+  optionsRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   optionChip: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -558,7 +650,6 @@ const styles = StyleSheet.create({
   optionChipText: { fontSize: 11, color: "#2C3E50" },
   optionChipTextSelected: { color: "#fff", fontWeight: "600" },
 
-  // Issues & Suggestions
   issueText: { fontSize: 12, color: "#E74C3C", marginLeft: 8, marginBottom: 2 },
   suggestionText: {
     fontSize: 12,
@@ -568,7 +659,15 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
 
-  // Result
+  warningBox: {
+    backgroundColor: "#FADBD8",
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  warningText: { fontSize: 13, color: "#C0392B", fontWeight: "bold" },
+  warningSub: { fontSize: 11, color: "#E74C3C", marginTop: 4 },
+
   resultCard: {
     backgroundColor: "#fff",
     padding: 16,
@@ -609,5 +708,18 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     textAlign: "center",
     marginTop: 16,
+  },
+  diagnosticBox: {
+    backgroundColor: "#E3F2FD",
+    padding: 10,
+    borderRadius: 6,
+    marginTop: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: "#2196F3",
+  },
+  diagnosticText: {
+    fontSize: 12,
+    color: "#1565C0",
+    fontWeight: "500",
   },
 });

@@ -120,7 +120,7 @@ export default function SellerChatDetail() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.push("/(seller)/sellerchat")}
+            onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />
@@ -150,7 +150,7 @@ export default function SellerChatDetail() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.push("/(seller)/sellerchat")}
+            onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />

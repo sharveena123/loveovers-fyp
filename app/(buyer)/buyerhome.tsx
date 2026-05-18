@@ -19,6 +19,7 @@ import {
   Clock,
   MapPin,
   Search,
+  ShoppingCart,
   Star,
   TrendingDown,
   User,
@@ -546,9 +547,20 @@ export default function BuyerHome() {
             </View>
           )}
         </View>
-        <TouchableOpacity style={styles.profileButton}>
-          <User size={24} color={colors.white} />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.cartButton}
+            onPress={() => router.push("/(buyer)/buyercart")}
+          >
+            <ShoppingCart size={24} color={colors.white} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.profileButton}
+            onPress={() => router.push("/(buyer)/buyerprofile")}
+          >
+            <User size={24} color={colors.white} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Location Suggestions Dropdown */}
@@ -849,6 +861,20 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   profileButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  cartButton: {
     width: 44,
     height: 44,
     borderRadius: 22,

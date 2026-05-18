@@ -2,11 +2,11 @@ import { auth } from "@/src/services/firebase/config";
 import { colors } from "@/src/theme/styles";
 import { router, Tabs } from "expo-router";
 import {
-  Home,
-  MapPin,
-  MessageSquare,
-  Package,
-  User,
+    Home,
+    MapPin,
+    MessageSquare,
+    Package,
+    User,
 } from "lucide-react-native";
 import { useEffect } from "react";
 
@@ -51,10 +51,8 @@ export default function BuyerLayout() {
       <Tabs.Screen
         name="buyercart"
         options={{
-          title: "Orders",
-          tabBarIcon: ({ color, size }) => (
-            <Package color={color} size={size} />
-          ),
+          href: null,
+          title: "",
         }}
       />
       <Tabs.Screen
@@ -97,8 +95,10 @@ export default function BuyerLayout() {
       <Tabs.Screen
         name="buyerorders"
         options={{
-          href: null,
-          title: "",
+          title: "Orders",
+          tabBarIcon: ({ color, size }) => (
+            <Package color={color} size={size} />
+          ),
         }}
       />
       <Tabs.Screen

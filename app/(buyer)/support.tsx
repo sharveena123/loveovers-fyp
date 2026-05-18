@@ -1,30 +1,30 @@
 import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
-  createIssue,
-  getUserIssues,
-  Issue,
+    createIssue,
+    getUserIssues,
+    Issue,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
 import { useFocusEffect, useRouter } from "expo-router";
 import {
-  AlertCircle,
-  ArrowLeft,
-  CheckCircle,
-  Clock,
+    AlertCircle,
+    ArrowLeft,
+    CheckCircle,
+    Clock,
 } from "lucide-react-native";
 import { useCallback, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  Modal,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    FlatList,
+    Modal,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 
 const ISSUE_TYPES = [
@@ -151,7 +151,7 @@ export default function Support() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={() => router.push("/(buyer)/buychat")}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />
@@ -176,7 +176,7 @@ export default function Support() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          onPress={() => router.push("/(buyer)/buychat")}
           style={styles.backButton}
         >
           <ArrowLeft size={24} color={colors.white} />

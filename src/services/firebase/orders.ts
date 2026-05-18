@@ -1,12 +1,12 @@
 // src/services/firebase/orders.ts
 import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  Timestamp,
-  updateDoc,
+    collection,
+    doc,
+    getDoc,
+    getDocs,
+    setDoc,
+    Timestamp,
+    updateDoc,
 } from "firebase/firestore";
 import { db } from "./config";
 
@@ -90,6 +90,57 @@ export const createOrderFromCart = async (
     };
 
     await setDoc(orderDocRef, order);
+
+    // Also create seller-specific order entries for each seller
+    try {
+      const sellerIds = [...new Set(items.map((item) => item.sellerId))];
+
+      for (const sellerId of sellerIds) {
+        try {
+          const sellerItems = items.filter(
+            (item) => item.sellerId === sellerId,
+          );
+          const sellerOrdersCol = collection(db, "sellers", sellerId, "orders");
+          const sellerOrderDocRef = doc(sellerOrdersCol);
+
+          const sellerSubtotal = sellerItems.reduce(
+            (sum, item) => sum + item.price * item.quantity,
+            0,
+          );
+
+          const sellerOrder = {
+            id: sellerOrderDocRef.id,
+            orderId: orderDocRef.id,
+            buyerId: userId,
+            customerName: shippingAddress.fullName,
+            customerPhone: shippingAddress.phone,
+            customerEmail: shippingAddress.email,
+            items: sellerItems,
+            subtotal: sellerSubtotal,
+            total: sellerSubtotal,
+            discount: 0,
+            shippingAddress,
+            paymentIntentId: paymentIntentId || "",
+            paymentStatus: "pending",
+            status: "pending",
+            pickupTime: shippingAddress.city,
+            pickupLocation: shippingAddress.street,
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
+          };
+
+          await setDoc(sellerOrderDocRef, sellerOrder);
+        } catch (sellerError) {
+          console.error(
+            `Error creating seller order for ${sellerId}:`,
+            sellerError,
+          );
+        }
+      }
+    } catch (sellerError) {
+      console.error("Error creating seller orders:", sellerError);
+    }
+
     return orderDocRef.id;
   } catch (error) {
     console.error("Error creating order from cart:", error);

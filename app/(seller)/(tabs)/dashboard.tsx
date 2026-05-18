@@ -1,11 +1,11 @@
 import { AddBagModal } from "@/src/components/dashboard/AddBagModal";
 import { AddItemModal } from "@/src/components/dashboard/AddItemModal";
+import { PredictionScreen } from "@/src/components/dashboard/PredictionScreen";
+import { UploadAndTrainScreen } from "@/src/components/dashboard/UploadScreen";
 import { Text } from "@/src/components/StyledText";
 import {
   DashboardStats,
   getDashboardStats,
-  getWeeklySalesData,
-  SalesData,
 } from "@/src/services/firebase/analytics";
 import { auth } from "@/src/services/firebase/config";
 import {
@@ -14,18 +14,19 @@ import {
 } from "@/src/services/firebase/inventoryServices";
 import { getUserProfile, SellerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import {
   AlertCircle,
   BarChart3,
   DollarSign,
   Package,
 } from "lucide-react-native";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -38,8 +39,10 @@ const { width } = Dimensions.get("window");
 export default function OwnerDashboard() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAddItemModal, setShowAddItemModal] = useState(false);
+  const [trainedCafeId, setTrainedCafeId] = useState<string | null>(null);
 
   const [stats, setStats] = useState<DashboardStats>({
     todayRevenue: 0,
@@ -50,17 +53,39 @@ export default function OwnerDashboard() {
     bagsChange: 0,
     wasteChange: 0,
   });
-  const [salesData, setSalesData] = useState<SalesData[]>([]);
   const [sellerProfile, setSellerProfile] = useState<SellerProfile | null>(
     null,
   );
-  const [activeTab, setActiveTab] = useState<"weekly" | "ai">("weekly");
 
-  useEffect(() => {
-    checkAuthAndLoadData();
+  const fetchDashboardData = useCallback(async (sellerId: string) => {
+    setLoading(true);
+    try {
+      // Update item statuses first to mark expired items
+      await inventoryService.updateItemStatuses(sellerId);
+
+      const [dashStats, items] = await Promise.all([
+        getDashboardStats(sellerId),
+        inventoryService.getInventory(sellerId),
+      ]);
+
+      setStats(dashStats);
+      // Filter items that are active OR fresh (not expired)
+      setInventory(
+        items.filter(
+          (item) =>
+            item.status === "active" ||
+            item.status === "fresh" ||
+            item.status === "expiring",
+        ),
+      );
+    } catch (error) {
+      console.error("Error fetching dashboard data:", error);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const checkAuthAndLoadData = async () => {
+  const checkAuthAndLoadData = useCallback(async () => {
     const user = auth.currentUser;
 
     if (!user) {
@@ -86,42 +111,37 @@ export default function OwnerDashboard() {
       console.error("Error loading profile:", error);
       Alert.alert("Error", "Failed to load profile");
     }
-  };
+  }, [fetchDashboardData]);
 
-  const fetchDashboardData = async (sellerId: string) => {
-    setLoading(true);
-    try {
-      // Update item statuses first to mark expired items
-      await inventoryService.updateItemStatuses(sellerId);
+  useEffect(() => {
+    checkAuthAndLoadData();
+  }, [checkAuthAndLoadData]);
 
-      const [dashStats, items, weeklyData] = await Promise.all([
-        getDashboardStats(sellerId),
-        inventoryService.getInventory(sellerId),
-        getWeeklySalesData(sellerId),
-      ]);
+  useFocusEffect(
+    useCallback(() => {
+      if (auth.currentUser) {
+        fetchDashboardData(auth.currentUser.uid);
+      }
+    }, [fetchDashboardData]),
+  );
 
-      setStats(dashStats);
-      // Filter items that are active OR fresh (not expired)
-      setInventory(
-        items.filter(
-          (item) =>
-            item.status === "active" ||
-            item.status === "fresh" ||
-            item.status === "expiring",
-        ),
-      );
-      setSalesData(weeklyData);
-    } catch (error) {
-      console.error("Error fetching dashboard data:", error);
-    } finally {
-      setLoading(false);
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    if (auth.currentUser) {
+      await fetchDashboardData(auth.currentUser.uid);
     }
-  };
+    setRefreshing(false);
+  }, [fetchDashboardData]);
 
   const handleAddSuccess = async () => {
     if (auth.currentUser) {
       await fetchDashboardData(auth.currentUser.uid);
     }
+  };
+
+  const handleTrainingComplete = (cafeId: string) => {
+    setTrainedCafeId(cafeId);
+    Alert.alert("Success", "Model trained! You can now make predictions.");
   };
 
   if (loading || !sellerProfile) {
@@ -136,11 +156,18 @@ export default function OwnerDashboard() {
     );
   }
 
-  const maxSales = Math.max(...salesData.map((d) => d.sales), 100);
-
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
+          />
+        }
+      >
         {/* Header */}
         <View style={styles.header}>
           <View>
@@ -224,6 +251,19 @@ export default function OwnerDashboard() {
           </View>
         </View>
 
+        {/* Analytics Button */}
+        <View style={styles.analyticsButtonSection}>
+          <TouchableOpacity
+            style={styles.analyticsButton}
+            onPress={() => router.push("../analytics")}
+          >
+            <BarChart3 size={20} color={colors.white} />
+            <Text style={styles.analyticsButtonText}>
+              View Business Analytics
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Active Mystery Bags */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -279,61 +319,19 @@ export default function OwnerDashboard() {
           )}
         </View>
 
-        {/* Analytics Tabs */}
+        {/* AI Prediction Section */}
         <View style={styles.section}>
-          <View style={styles.tabContainer}>
-            <TouchableOpacity
-              style={[styles.tab, activeTab === "weekly" && styles.tabActive]}
-              onPress={() => setActiveTab("weekly")}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === "weekly" && styles.tabTextActive,
-                ]}
-              >
-                Weekly Overview
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tab, activeTab === "ai" && styles.tabActive]}
-              onPress={() => setActiveTab("ai")}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === "ai" && styles.tabTextActive,
-                ]}
-              >
-                AI Prediction
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Chart */}
-          <View style={styles.chart}>
-            {salesData.length > 0 ? (
-              salesData.map((data, index) => (
-                <View key={index} style={styles.chartBar}>
-                  <View style={styles.barGroup}>
-                    <View
-                      style={[
-                        styles.salesBar,
-                        { height: Math.max((data.sales / maxSales) * 150, 2) }, // Minimum 2px
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.wasteBar,
-                        { height: Math.max((data.waste / maxSales) * 150, 2) }, // Minimum 2px
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.chartLabel}>{data.day}</Text>
-                </View>
-              ))
+          <View style={styles.aiSection}>
+            {!trainedCafeId ? (
+              <UploadAndTrainScreen
+                onTrainingComplete={handleTrainingComplete}
+              />
             ) : (
-              <Text style={styles.emptyText}>No data available</Text>
+              <PredictionScreen
+                cafeId={trainedCafeId}
+                onModelNotFound={() => setTrainedCafeId(null)}
+                onRetrain={() => setTrainedCafeId(null)}
+              />
             )}
           </View>
         </View>
@@ -368,245 +366,243 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: colors.primary,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
   shopName: {
-    fontSize: 24,
-    fontWeight: "700",
+    fontSize: 28,
+    fontWeight: "800",
     color: colors.white,
     marginBottom: 4,
+    letterSpacing: -0.5,
   },
   headerButtons: {
     flexDirection: "row",
     gap: spacing.sm,
   },
   addItemButton: {
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    borderWidth: 1,
-    borderColor: colors.white,
+    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    borderWidth: 1.5,
+    borderColor: "rgba(255, 255, 255, 0.5)",
   },
   subtitle: {
     fontSize: 14,
-    color: "rgba(255, 255, 255, 0.9)",
+    color: "rgba(255, 255, 255, 0.85)",
+    fontWeight: "500",
   },
   addButton: {
     backgroundColor: colors.white,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    borderRadius: 8,
+    borderRadius: 10,
     flexDirection: "row",
     alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
   },
   addButtonText: {
     color: colors.primary,
-    fontWeight: "600",
+    fontWeight: "700",
     fontSize: 14,
   },
   statsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    padding: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
     gap: spacing.md,
   },
   statCard: {
     backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
+    borderRadius: 16,
+    padding: spacing.lg,
     width: (width - spacing.md * 3) / 2,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.05)",
   },
   iconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 54,
+    height: 54,
+    borderRadius: 14,
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   statValue: {
-    fontSize: 28,
-    fontWeight: "700",
+    fontSize: 32,
+    fontWeight: "800",
     color: colors.text,
-    marginBottom: 4,
+    marginBottom: 6,
+    letterSpacing: -0.5,
   },
   statLabel: {
     fontSize: 13,
     color: colors.textSoft,
-    marginBottom: 8,
-  },
-  statChange: {
-    fontSize: 12,
+    marginBottom: 10,
     fontWeight: "500",
   },
+  statChange: {
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
   section: {
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
   },
   sectionHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: "600",
+    fontSize: 20,
+    fontWeight: "700",
     color: colors.text,
+    letterSpacing: -0.3,
   },
   liveBadge: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.successSoft,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: 14,
   },
   liveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: colors.success,
-    marginRight: 6,
+    marginRight: 8,
   },
   liveText: {
-    fontSize: 12,
+    fontSize: 13,
     color: colors.success,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   bagCard: {
     backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
+    borderRadius: 14,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "rgba(0, 0, 0, 0.05)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
   bagHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: spacing.sm,
+    alignItems: "center",
+    marginBottom: spacing.md,
   },
   bagName: {
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "700",
     color: colors.text,
   },
   bagPrice: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.textSoft,
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.primary,
   },
   bagInfo: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   bagDetail: {
     fontSize: 13,
     color: colors.textSoft,
+    fontWeight: "500",
   },
   bagDot: {
     marginHorizontal: spacing.sm,
     color: colors.textSoft,
+    fontWeight: "300",
   },
   progressBar: {
-    height: 6,
-    backgroundColor: "#f0f0f0",
-    borderRadius: 3,
+    height: 8,
+    backgroundColor: "rgba(0, 0, 0, 0.08)",
+    borderRadius: 4,
     overflow: "hidden",
   },
   progressFill: {
     height: "100%",
     backgroundColor: colors.primary,
-    borderRadius: 3,
+    borderRadius: 4,
   },
   emptyState: {
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 16,
     padding: spacing.xl,
     alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: "rgba(0, 0, 0, 0.05)",
+    borderStyle: "dashed",
   },
   emptyText: {
     fontSize: 16,
     color: colors.text,
-    fontWeight: "500",
-    marginBottom: 4,
+    fontWeight: "600",
+    marginBottom: 6,
   },
   emptySubtext: {
-    fontSize: 14,
+    fontSize: 13,
     color: colors.textSoft,
   },
-  tabContainer: {
+  aiSection: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    overflow: "hidden",
+    marginTop: spacing.md,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: "rgba(0, 0, 0, 0.05)",
+  },
+  analyticsButtonSection: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  analyticsButton: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    borderRadius: 14,
     flexDirection: "row",
-    backgroundColor: colors.white,
-    borderRadius: 8,
-    padding: 4,
-    marginBottom: spacing.lg,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: spacing.sm,
     alignItems: "center",
-    borderRadius: 6,
+    justifyContent: "center",
+    gap: spacing.md,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
   },
-  tabActive: {
-    backgroundColor: colors.background,
-  },
-  tabText: {
-    fontSize: 14,
-    color: colors.textSoft,
-    fontWeight: "500",
-  },
-  tabTextActive: {
-    color: colors.text,
-    fontWeight: "600",
-  },
-  chartContainer: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.lg,
-  },
-  chartTitle: {
+  analyticsButtonText: {
+    color: colors.white,
     fontSize: 16,
-    fontWeight: "600",
-    color: colors.text,
-    marginBottom: spacing.lg,
-  },
-  chart: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    height: 180,
-  },
-  chartBar: {
-    flex: 1,
-    alignItems: "center",
-  },
-  barGroup: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 2,
-    marginBottom: spacing.sm,
-  },
-  salesBar: {
-    width: 12,
-    backgroundColor: colors.text,
-    borderRadius: 2,
-  },
-  wasteBar: {
-    width: 12,
-    backgroundColor: colors.textSoft,
-    borderRadius: 2,
-  },
-  chartLabel: {
-    fontSize: 11,
-    color: colors.textSoft,
-    marginTop: 4,
+    fontWeight: "800",
+    letterSpacing: 0.3,
   },
 });

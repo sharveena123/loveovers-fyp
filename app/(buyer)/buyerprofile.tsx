@@ -2,22 +2,54 @@ import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import { colors, spacing } from "@/src/theme/styles";
 import { useRouter } from "expo-router";
-import { Heart, LogOut, MapPin, Settings, User } from "lucide-react-native";
-import React, { useState } from "react";
+import { Bell, Heart, LogOut, MapPin, Settings, User } from "lucide-react-native";
+import React, { useEffect, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
     SafeAreaView,
     ScrollView,
     StyleSheet,
+    Switch,
     TouchableOpacity,
     View,
 } from "react-native";
+import { getBuyerPreferences, updateBuyerPreferences } from "@/src/services/firebase/user";
 
 export default function BuyerProfile() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [loading, setLoading] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+
+  useEffect(() => {
+    if (user) {
+      loadPreferences();
+    }
+  }, [user]);
+
+  const loadPreferences = async () => {
+    try {
+      const prefs = await getBuyerPreferences(user.uid);
+      setNotificationsEnabled(prefs?.pushNotifications ?? true);
+    } catch (error) {
+      console.error("Error loading preferences:", error);
+    }
+  };
+
+  const handleNotificationToggle = async (value: boolean) => {
+    try {
+      setNotificationsEnabled(value);
+      await updateBuyerPreferences(user.uid, {
+        pushNotifications: value,
+      });
+    } catch (error) {
+      console.error("Error updating preferences:", error);
+      Alert.alert("Error", "Failed to update notification settings");
+      // Revert on error
+      setNotificationsEnabled(!value);
+    }
+  };
 
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -110,6 +142,25 @@ export default function BuyerProfile() {
         {/* Menu Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Settings</Text>
+
+          {/* Notifications Toggle */}
+          <View style={styles.notificationCard}>
+            <View style={styles.notificationLeft}>
+              <View style={[styles.notificationIcon, { backgroundColor: '#FFF5E6' }]}>
+                <Bell size={20} color={colors.primary} />
+              </View>
+              <View>
+                <Text style={styles.menuItemText}>Push Notifications</Text>
+                <Text style={styles.notificationSubtitle}>Order updates & deals</Text>
+              </View>
+            </View>
+            <Switch
+              value={notificationsEnabled}
+              onValueChange={handleNotificationToggle}
+              trackColor={{ false: '#E5E5E5', true: colors.primary }}
+              thumbColor="#fff"
+            />
+          </View>
 
           <TouchableOpacity
             style={styles.menuItem}
@@ -296,6 +347,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: colors.white,
+  },
+  notificationCard: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    marginBottom: spacing.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  notificationLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    flex: 1,
+  },
+  notificationIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  notificationSubtitle: {
+    fontSize: 12,
+    color: colors.textSoft,
   },
   bottomSpacing: {
     height: spacing.xl,

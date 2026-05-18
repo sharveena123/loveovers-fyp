@@ -49,6 +49,7 @@ export interface SellerProfile {
   phone: string;
   businessAddress: string;
   tier?: "Free" | "Premium" | "Premium Seller";
+  cafeId?: string;
   operatingHours?: OperatingHours;
   settings?: BusinessSettings;
   createdAt: Timestamp | Date;
@@ -205,6 +206,18 @@ export async function updateBuyerProfile(
 export async function updateSellerProfile(
   uid: string,
   updates: Partial<SellerProfile>,
+): Promise<void> {
+  const ref = doc(db, "users", uid);
+  await updateDoc(ref, {
+    ...updates,
+    updatedAt: Timestamp.now(),
+  });
+}
+
+// Generic update user profile
+export async function updateUserProfile(
+  uid: string,
+  updates: Record<string, any>,
 ): Promise<void> {
   const ref = doc(db, "users", uid);
   await updateDoc(ref, {

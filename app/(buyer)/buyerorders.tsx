@@ -2,8 +2,8 @@ import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import { BuyerOrder, getBuyerOrders } from "@/src/services/firebase/orders";
 import { colors, spacing } from "@/src/theme/styles";
-import { useFocusEffect } from "expo-router";
-import { AlertCircle, Package } from "lucide-react-native";
+import { router, useFocusEffect } from "expo-router";
+import { AlertCircle, Package, ShoppingCart } from "lucide-react-native";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
@@ -29,6 +29,7 @@ export default function BuyerOrders() {
     try {
       setLoading(true);
       const userOrders = await getBuyerOrders(user.uid);
+      // Show all placed orders
       setOrders(userOrders);
     } catch (error) {
       console.error("Error loading orders:", error);
@@ -90,6 +91,12 @@ export default function BuyerOrders() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>My Orders</Text>
+        <TouchableOpacity
+          style={styles.cartButton}
+          onPress={() => router.push("/(buyer)/buyercart")}
+        >
+          <ShoppingCart size={24} color={colors.white} />
+        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -127,7 +134,7 @@ export default function BuyerOrders() {
                   </Text>
                   <Text style={styles.itemQty}>Qty: {item.quantity}</Text>
                   <Text style={styles.itemPrice}>
-                    ${(item.price * item.quantity).toFixed(2)}
+                    RM{(item.price * item.quantity).toFixed(2)}
                   </Text>
                 </View>
               ))}
@@ -142,7 +149,7 @@ export default function BuyerOrders() {
               </View>
               <View style={styles.totalContainer}>
                 <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalPrice}>${item.total.toFixed(2)}</Text>
+                <Text style={styles.totalPrice}>RM{item.total.toFixed(2)}</Text>
               </View>
             </View>
 
@@ -178,11 +185,24 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.lg,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
   headerTitle: {
     fontSize: 24,
     fontWeight: "700",
     color: colors.white,
+    flex: 1,
+  },
+  cartButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
   },
   loadingContainer: {
     flex: 1,

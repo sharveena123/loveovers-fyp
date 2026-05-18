@@ -1,4 +1,4 @@
-// src/ai/types.ts - Hybrid approach with confirmation
+// src/ai/types.ts - v4.2 Ollama
 
 export type BakeryItem = string;
 
@@ -10,13 +10,18 @@ export type DayOfWeek =
   | "Friday"
   | "Saturday"
   | "Sunday";
+
 export type Weather = "Sunny" | "Cloudy" | "Rainy" | "Unknown";
 
-// Column that needs user confirmation
-export type NeedsConfirmation = {
-  column: string;
-  suggested_mapping: string;
-  confidence: string;
+// Editable mapping entry from /assess
+export type EditableMappingEntry = {
+  original_column: string;
+  current_mapping: string;
+  ai_suggested_mapping: string;
+  source: "rule" | "llm" | "unmapped";
+  confidence: "high" | "medium" | "low";
+  editable: boolean;
+  user_modified?: boolean;
   options: string[];
 };
 
@@ -28,10 +33,12 @@ export type LayerBreakdown = {
 };
 
 export type DatasetAssessment = {
+  assessment_id: string;
   cafe_name: string;
   total_rows: number;
   total_columns: number;
   original_columns: string[];
+  editable_mapping: EditableMappingEntry[];
   detected_mapping: Record<string, string>;
   llm_assisted_mapping: Record<string, string>;
   needs_confirmation: NeedsConfirmation[];
@@ -40,21 +47,43 @@ export type DatasetAssessment = {
   data_quality_issues: string[];
   suggestions: string[];
   usable: boolean;
-  confidence: string; // "high" | "medium" | "low"
+  confidence: string;
   layer_breakdown: LayerBreakdown;
+  message?: string;
+  diagnostic?: string;
+  ai_engine?: string;
+};
+
+// Column that needs user confirmation (legacy, kept for compatibility)
+export type NeedsConfirmation = {
+  column: string;
+  suggested_mapping: string;
+  confidence: string;
+  options: string[];
 };
 
 export type TrainingResult = {
   cafe_id: string;
   cafe_name: string;
   status: string;
+  model: string; // will now say "XGBoost+LightGBM+CatBoost Ensemble"
   rows_used: number;
   items: string[];
   mae: number;
   r2: number;
+  cv_mae: number;
   confidence: string;
   detected_mapping: Record<string, string>;
+  top_features?: Record<string, number>;
   message: string;
+  // NEW: ensemble-specific
+  model_breakdown?: {
+    xgboost: { mae: number; r2: number };
+    lightgbm: { mae: number; r2: number };
+    catboost: { mae: number; r2: number };
+    ensemble: { mae: number; r2: number };
+  };
+  best_individual?: "xgboost" | "lightgbm" | "catboost";
 };
 
 export type PredictionRequest = {
@@ -65,6 +94,13 @@ export type PredictionRequest = {
   price: number;
   discount_pct?: number;
   produced_qty?: number;
+  date?: string;
+  // Historical context for lag features
+  sold_qty_lag_1?: number;
+  sold_qty_lag_7?: number;
+  sold_qty_lag_14?: number;
+  sold_qty_roll_7?: number;
+  item_avg_sales?: number;
 };
 
 export type PredictionResponse = {
@@ -86,7 +122,29 @@ export type PredictionResponse = {
   revenue_impact: number;
   is_weekend: boolean;
   model_accuracy: number;
+  cv_mae: number;
   training_size: number;
+};
+
+export type BatchPredictionItem = {
+  item: string;
+  base_predicted_sales: number;
+  predicted_sales: number;
+  recommended_production: number;
+  expected_surplus: number;
+};
+
+export type BatchPredictionResponse = {
+  cafe_id: string;
+  cafe_name: string;
+  day: string;
+  weather: string;
+  discount_pct: number;
+  predictions: BatchPredictionItem[];
+  total_base_sales: number;
+  total_predicted_sales: number;
+  total_recommended_production: number;
+  total_expected_surplus: number;
 };
 
 export type CafeInfo = {
@@ -95,4 +153,25 @@ export type CafeInfo = {
   items: string[];
   training_rows: number;
   r2: number;
+  cv_mae: number;
+  model: string;
+};
+
+export type AssessmentUpdateResponse = {
+  assessment_id: string;
+  applied_changes: {
+    column: string;
+    old_mapping: string;
+    new_mapping: string;
+  }[];
+  rejected_changes: {
+    column: string;
+    reason: string;
+  }[];
+  current_mapping: Record<string, string>;
+  missing_required: string[];
+  missing_optional: string[];
+  usable: boolean;
+  editable_mapping: EditableMappingEntry[];
+  message: string;
 };
