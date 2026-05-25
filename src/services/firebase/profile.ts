@@ -1,55 +1,130 @@
-import { collection, getDocs, query, where } from 'firebase/firestore'
-import { db } from './config'
+import { collection, getDocs } from "firebase/firestore";
+import {
+  aggregateLineItems,
+  co2KgFromMeals,
+  ImpactLineItem,
+} from "@/src/utils/impactMetrics";
+import { db } from "./config";
 
 export interface ProfileStats {
-  totalSales: number
-  rating: number
-  savedPercentage: number
-  mealsSaved: number
-  co2Reduced: number
-  revenueSaved: number
-  wasteDown: number
+  totalSales: number;
+  rating: number;
+  /** % of listed inventory units that were sold (rescue rate). */
+  savedPercentage: number;
+  mealsSaved: number;
+  /** kg CO₂ equivalent avoided. */
+  co2SavedKg: number;
+  /** Total RM earned from rescue orders (non-cancelled). */
+  revenueSaved: number;
+  /** % of listed stock that did not go to waste (same as savedPercentage). */
+  wasteDown: number;
+  foodSavedKg: number;
+  itemsSold: number;
 }
 
-export const getProfileStats = async (sellerId: string): Promise<ProfileStats> => {
-  try {
-    // Get all completed orders
-    const ordersRef = collection(db, 'sellers', sellerId, 'orders')
-    const completedQuery = query(ordersRef, where('status', '==', 'completed'))
-    const ordersSnapshot = await getDocs(completedQuery)
-    
-    let totalSales = 0
-    let totalRevenue = 0
-    
-    ordersSnapshot.forEach(doc => {
-      totalSales++
-      totalRevenue += doc.data().total || 0
-    })
+const EMPTY_PROFILE_STATS: ProfileStats = {
+  totalSales: 0,
+  rating: 0,
+  savedPercentage: 0,
+  mealsSaved: 0,
+  co2SavedKg: 0,
+  revenueSaved: 0,
+  wasteDown: 0,
+  foodSavedKg: 0,
+  itemsSold: 0,
+};
 
-    // Calculate stats
-    const mealsSaved = totalSales * 3 // Average meals per bag
-    const co2Reduced = parseFloat((mealsSaved * 2.5 / 1000).toFixed(1)) // kg to tons
-    const revenueSaved = totalRevenue
-    
+const COUNTED_ORDER_STATUSES = new Set([
+  "completed",
+  "ready",
+  "confirmed",
+  "pending",
+]);
+
+export const getProfileStats = async (
+  sellerId: string,
+): Promise<ProfileStats> => {
+  try {
+    const ordersRef = collection(db, "sellers", sellerId, "orders");
+    const ordersSnapshot = await getDocs(ordersRef);
+
+    let totalSales = 0;
+    let revenueSaved = 0;
+    const lineItems: ImpactLineItem[] = [];
+
+    ordersSnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const status = String(data.status || "pending");
+
+      if (status === "cancelled") return;
+      if (!COUNTED_ORDER_STATUSES.has(status)) return;
+
+      totalSales += 1;
+      revenueSaved += data.total || data.subtotal || 0;
+
+      const items = (data.items || []) as Array<{
+        quantity?: number;
+        price?: number;
+        originalPrice?: number;
+        type?: string;
+        name?: string;
+      }>;
+
+      for (const item of items) {
+        lineItems.push({
+          quantity: item.quantity || 1,
+          price: item.price || 0,
+          originalPrice: item.originalPrice,
+          type: item.type,
+          name: item.name,
+        });
+      }
+    });
+
+    const aggregated = aggregateLineItems(lineItems);
+    const mealsSaved = aggregated.mealsRescued;
+
+    const inventoryRef = collection(db, "sellers", sellerId, "inventory");
+    const inventorySnapshot = await getDocs(inventoryRef);
+
+    let totalListed = 0;
+    let totalSold = 0;
+
+    inventorySnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const listed = data.quantity || 0;
+      const sold = data.sold || 0;
+      totalListed += listed;
+      totalSold += sold;
+    });
+
+    const totalWaste = Math.max(0, totalListed - totalSold);
+    const rescueRate =
+      totalListed > 0 ? (totalSold / totalListed) * 100 : 0;
+    const wasteRate =
+      totalListed > 0 ? (totalWaste / totalListed) * 100 : 0;
+
+    const savedPercentage = Math.round(rescueRate);
+    const wasteDown = Math.round(Math.max(0, 100 - wasteRate));
+
+    const itemsSold = lineItems.reduce(
+      (sum, item) => sum + (item.quantity || 0),
+      0,
+    );
+
     return {
       totalSales,
-      rating: 4.8,
-      savedPercentage: 92,
-      mealsSaved,
-      co2Reduced,
-      revenueSaved,
-      wasteDown: 89,
-    }
+      rating: totalSales > 0 ? 4.8 : 0,
+      savedPercentage,
+      mealsSaved: Math.round(mealsSaved),
+      co2SavedKg: co2KgFromMeals(mealsSaved),
+      revenueSaved: Math.round(revenueSaved * 100) / 100,
+      wasteDown,
+      foodSavedKg: aggregated.foodSavedKg,
+      itemsSold,
+    };
   } catch (error) {
-    console.error('Error fetching profile stats:', error)
-    return {
-      totalSales: 847,
-      rating: 4.8,
-      savedPercentage: 92,
-      mealsSaved: 2847,
-      co2Reduced: 1.2,
-      revenueSaved: 18500,
-      wasteDown: 89,
-    }
+    console.error("Error fetching profile stats:", error);
+    return EMPTY_PROFILE_STATS;
   }
-}
+};

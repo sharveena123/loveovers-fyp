@@ -22,6 +22,8 @@ import {
 } from "react-native";
 import { batchPredict, getCafeInfo, predictForCafe } from "../../ai/api";
 import { PredictionResponse } from "../../ai/types";
+import { suggestedSimulatorDiscountPct } from "@/src/services/pricing/dynamicPricing";
+import { DailySalesEntryScreen } from "./DailySalesEntryScreen";
 
 const DAYS = [
   "Monday",
@@ -41,15 +43,21 @@ const WEATHERS = [
 
 interface PredictionScreenProps {
   cafeId: string;
+  /** Used for auto discount % in predict / daily-sales (matches seller closing hour). */
+  simulatorClosingHour?: number;
   onModelNotFound?: () => void;
   onRetrain?: () => void;
 }
 
+type AiTab = "predict" | "daily";
+
 export function PredictionScreen({
   cafeId,
+  simulatorClosingHour = 20,
   onModelNotFound,
   onRetrain,
 }: PredictionScreenProps) {
+  const [activeTab, setActiveTab] = useState<AiTab>("predict");
   const [cafeName, setCafeName] = useState("");
   const [cafeItems, setCafeItems] = useState<string[]>([]);
 
@@ -58,8 +66,10 @@ export function PredictionScreen({
   const [selectedWeather, setSelectedWeather] = useState("Sunny");
   const [price, setPrice] = useState("");
 
-  const [useDiscount, setUseDiscount] = useState(false);
-  const [discount, setDiscount] = useState("10");
+  const [useDiscount, setUseDiscount] = useState(true);
+  const [discount, setDiscount] = useState(() =>
+    String(suggestedSimulatorDiscountPct(new Date(), simulatorClosingHour)),
+  );
 
   const [result, setResult] = useState<PredictionResponse | null>(null);
   const [batchResult, setBatchResult] = useState<{
@@ -84,6 +94,12 @@ export function PredictionScreen({
     setBatchResult(null);
     loadCafeInfo();
   }, [cafeId]);
+
+  useEffect(() => {
+    setDiscount(
+      String(suggestedSimulatorDiscountPct(new Date(), simulatorClosingHour)),
+    );
+  }, [simulatorClosingHour]);
 
   const loadCafeInfo = async () => {
     if (!cafeId) {
@@ -186,7 +202,9 @@ export function PredictionScreen({
             <Text style={styles.cafeName} numberOfLines={1}>
               {cafeName}
             </Text>
-            <Text style={styles.headerSubtitle}>Surplus prediction</Text>
+            <Text style={styles.headerSubtitle}>
+              {activeTab === "predict" ? "Surplus prediction" : "Daily sales log"}
+            </Text>
           </View>
         </View>
         <TouchableOpacity
@@ -195,10 +213,47 @@ export function PredictionScreen({
           activeOpacity={0.85}
         >
           <RefreshCw size={16} color={colors.primary} />
-          <Text style={styles.retrainText}>Retrain</Text>
+          <Text style={styles.retrainText}>Re-upload</Text>
         </TouchableOpacity>
       </View>
 
+      <View style={styles.tabRow}>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === "predict" && styles.tabActive]}
+          onPress={() => setActiveTab("predict")}
+        >
+          <Text
+            style={[
+              styles.tabText,
+              activeTab === "predict" && styles.tabTextActive,
+            ]}
+          >
+            Predict
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, activeTab === "daily" && styles.tabActive]}
+          onPress={() => setActiveTab("daily")}
+        >
+          <Text
+            style={[
+              styles.tabText,
+              activeTab === "daily" && styles.tabTextActive,
+            ]}
+          >
+            Log sales
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {activeTab === "daily" ? (
+        <DailySalesEntryScreen
+          cafeId={cafeId}
+          simulatorClosingHour={simulatorClosingHour}
+          onSaved={() => loadCafeInfo()}
+        />
+      ) : (
+        <>
       {/* Item selector */}
       <Text style={styles.fieldLabel}>Item</Text>
       <ScrollView
@@ -288,10 +343,11 @@ export function PredictionScreen({
       {/* Discount */}
       <View style={styles.discountCard}>
         <View style={styles.discountHeader}>
-          <View>
-            <Text style={styles.discountTitle}>Mystery bag discount</Text>
+          <View style={styles.discountHeaderText}>
+            <Text style={styles.discountTitle}>Smart discount (simulator)</Text>
             <Text style={styles.discountDesc}>
-              Simulate a &quot;what if&quot; discount scenario
+              Auto from time-of-day vs your closing hour — turn off to type a
+              custom % for this run only.
             </Text>
           </View>
           <Switch
@@ -312,8 +368,7 @@ export function PredictionScreen({
               placeholderTextColor={colors.textSoft}
             />
             <Text style={styles.discountHint}>
-              {discount}% off → ~{Math.round(Number(discount) * 1.5)}% more sales
-              expected
+              {discount}% off (smart default — edit if needed)
             </Text>
           </View>
         )}
@@ -517,6 +572,8 @@ export function PredictionScreen({
           </View>
         </View>
       )}
+        </>
+      )}
 
     </View>
   );
@@ -590,6 +647,32 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: colors.primary,
+  },
+  tabRow: {
+    flexDirection: "row",
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: "center",
+    borderRadius: 10,
+  },
+  tabActive: {
+    backgroundColor: colors.primary,
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.textSoft,
+  },
+  tabTextActive: {
+    color: colors.white,
   },
   fieldLabel: {
     fontSize: 12,
@@ -689,11 +772,17 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     borderWidth: 1,
     borderColor: "rgba(106, 60, 0, 0.1)",
+    overflow: "hidden",
   },
   discountHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+  },
+  discountHeaderText: {
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
   },
   discountTitle: {
     fontSize: 14,
@@ -704,6 +793,8 @@ const styles = StyleSheet.create({
   discountDesc: {
     fontSize: 12,
     color: colors.textSoft,
+    lineHeight: 17,
+    flexShrink: 1,
   },
   discountBody: {
     marginTop: spacing.sm,

@@ -5,6 +5,7 @@ import {
   getConversations,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
+import { pushWithReturn, SELLER_ROUTES } from "@/src/utils/navigation";
 import { useFocusEffect, useRouter } from "expo-router";
 import {
   ChevronRight,
@@ -165,10 +166,12 @@ export default function SellerChat() {
   }, [loadConversations]);
 
   const handleOpenChat = (conversationId: string) => {
-    router.push({
-      pathname: "/(seller)/chat/[id]",
-      params: { id: conversationId },
-    });
+    pushWithReturn(
+      router,
+      "/(seller)/chat/[id]",
+      SELLER_ROUTES.chat,
+      { id: conversationId },
+    );
   };
 
   const totalUnread = conversations.reduce(
@@ -262,7 +265,9 @@ export default function SellerChat() {
       <View style={styles.footer}>
         <TouchableOpacity
           style={styles.supportCard}
-          onPress={() => router.push("/(seller)/support")}
+          onPress={() =>
+            pushWithReturn(router, "/(seller)/support", SELLER_ROUTES.chat)
+          }
           activeOpacity={0.88}
         >
           <View style={styles.supportIconWrap}>

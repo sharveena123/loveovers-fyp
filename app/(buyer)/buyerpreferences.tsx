@@ -8,7 +8,8 @@ import {
     updateBuyerPreferences,
 } from "@/src/services/firebase/user";
 import { colors as defaultColors, spacing } from "@/src/theme/styles";
-import { useRouter } from "expo-router";
+import { BUYER_ROUTES, goBackToReturn } from "@/src/utils/navigation";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Bell, MapPin, Moon, Zap } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
@@ -24,7 +25,11 @@ import {
 
 export default function BuyerPreferencesScreen() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const { user } = useAuth();
+
+  const handleBack = () =>
+    goBackToReturn(router, returnTo, BUYER_ROUTES.profile);
   const { isDarkMode, setIsDarkMode, colors } = useTheme();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -44,7 +49,7 @@ export default function BuyerPreferencesScreen() {
       try {
         if (!user?.uid) {
           Alert.alert("Error", "User not authenticated");
-          router.back();
+          handleBack();
           return;
         }
 
@@ -94,7 +99,7 @@ export default function BuyerPreferencesScreen() {
         Alert.alert("Success", "Preferences saved successfully", [
           {
             text: "OK",
-            onPress: () => router.back(),
+            onPress: handleBack,
           },
         ]);
       }
@@ -139,7 +144,7 @@ export default function BuyerPreferencesScreen() {
         {/* Header */}
         <View style={[styles.header, { backgroundColor: colors.primary }]}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={handleBack}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.buttonText} />
@@ -284,7 +289,7 @@ export default function BuyerPreferencesScreen() {
           />
           <PrimaryButton
             title="Cancel"
-            onPress={() => router.back()}
+            onPress={handleBack}
             variant="outlined"
             style={{ marginTop: spacing.md }}
           />

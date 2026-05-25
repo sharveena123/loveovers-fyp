@@ -5,18 +5,122 @@ import {
   getConversations,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
+import { BUYER_ROUTES, pushWithReturn } from "@/src/utils/navigation";
 import { useFocusEffect, useRouter } from "expo-router";
-import { AlertCircle, MessageSquare } from "lucide-react-native";
+import {
+  ChevronRight,
+  Headphones,
+  MessageSquare,
+  Sparkles,
+} from "lucide-react-native";
 import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  RefreshControl,
   SafeAreaView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from "react-native";
+
+function getInitials(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n.charAt(0).toUpperCase())
+    .join("")
+    .slice(0, 2);
+}
+
+function toDate(time: Conversation["lastMessageTime"]): Date | null {
+  if (!time) return null;
+  if (typeof time === "object" && "seconds" in time) {
+    return new Date(time.seconds * 1000);
+  }
+  if (time instanceof Date) return time;
+  return null;
+}
+
+function formatMessageTime(time: Conversation["lastMessageTime"]) {
+  const date = toDate(time);
+  if (!date) return "";
+
+  const diff = Date.now() - date.getTime();
+  if (diff < 60_000) return "Just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  if (diff < 172_800_000) return "Yesterday";
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function ConversationCard({
+  item,
+  onPress,
+}: {
+  item: Conversation & { id: string };
+  onPress: () => void;
+}) {
+  const unread = item.buyerUnreadCount > 0;
+  const isOwnLast =
+    item.lastMessageSenderId && item.lastMessageSenderId === item.buyerId;
+
+  return (
+    <TouchableOpacity
+      style={[styles.conversationCard, unread && styles.conversationCardUnread]}
+      onPress={onPress}
+      activeOpacity={0.88}
+    >
+      <View style={styles.avatarWrap}>
+        <View style={[styles.avatar, unread && styles.avatarUnread]}>
+          <Text style={[styles.avatarText, unread && styles.avatarTextUnread]}>
+            {getInitials(item.sellerName)}
+          </Text>
+        </View>
+        {unread && <View style={styles.unreadDot} />}
+      </View>
+
+      <View style={styles.conversationBody}>
+        <View style={styles.conversationTop}>
+          <Text
+            style={[styles.sellerName, unread && styles.sellerNameUnread]}
+            numberOfLines={1}
+          >
+            {item.sellerName}
+          </Text>
+          <Text style={[styles.timestamp, unread && styles.timestampUnread]}>
+            {formatMessageTime(item.lastMessageTime)}
+          </Text>
+        </View>
+
+        <View style={styles.messagePreviewRow}>
+          <Text
+            style={[styles.lastMessage, unread && styles.lastMessageUnread]}
+            numberOfLines={1}
+          >
+            {isOwnLast ? "You: " : ""}
+            {item.lastMessage || "No messages yet"}
+          </Text>
+          {unread && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadBadgeText}>
+                {item.buyerUnreadCount > 9 ? "9+" : item.buyerUnreadCount}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {item.orderId ? (
+          <Text style={styles.orderTag}>Order #{item.orderId.slice(-6)}</Text>
+        ) : null}
+      </View>
+
+      <ChevronRight size={18} color={colors.textSoft} style={styles.chevron} />
+    </TouchableOpacity>
+  );
+}
 
 export default function BuyerChat() {
   const router = useRouter();
@@ -25,6 +129,7 @@ export default function BuyerChat() {
     (Conversation & { id: string })[]
   >([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadConversations = useCallback(async () => {
     if (!user) {
@@ -34,40 +139,50 @@ export default function BuyerChat() {
     }
 
     try {
-      setLoading(true);
       const chats = await getConversations(user.uid, "buyer");
       setConversations(chats);
     } catch (error) {
       console.error("Error loading conversations:", error);
       Alert.alert("Error", "Failed to load conversations");
-    } finally {
-      setLoading(false);
     }
   }, [user]);
 
   useFocusEffect(
     useCallback(() => {
       if (user) {
-        loadConversations();
+        setLoading(true);
+        loadConversations().finally(() => setLoading(false));
       }
     }, [user, loadConversations]),
   );
 
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadConversations();
+    setRefreshing(false);
+  }, [loadConversations]);
+
   const handleOpenChat = (conversationId: string) => {
-    router.push({
-      pathname: "/(buyer)/chat/[id]",
-      params: { id: conversationId },
-    });
+    pushWithReturn(
+      router,
+      "/(buyer)/chat/[id]",
+      BUYER_ROUTES.chat,
+      { id: conversationId },
+    );
   };
 
-  const handleReportIssue = () => {
-    router.push("/(buyer)/support");
-  };
+  const totalUnread = conversations.reduce(
+    (sum, c) => sum + (c.buyerUnreadCount || 0),
+    0,
+  );
 
   if (loading || authLoading) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading messages…</Text>
+        </View>
       </SafeAreaView>
     );
   }
@@ -76,15 +191,22 @@ export default function BuyerChat() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
+          <View style={styles.headerDecor} />
           <Text style={styles.headerTitle}>Messages</Text>
         </View>
         <View style={styles.emptyState}>
+          <View style={styles.emptyIconWrap}>
+            <MessageSquare size={32} color={colors.primary} />
+          </View>
           <Text style={styles.emptyTitle}>Please log in</Text>
+          <Text style={styles.emptyText}>
+            Sign in to chat with sellers about your orders
+          </Text>
           <TouchableOpacity
-            style={styles.button}
+            style={styles.primaryButton}
             onPress={() => router.push("/(auth)/login")}
           >
-            <Text style={styles.buttonText}>Go to Login</Text>
+            <Text style={styles.primaryButtonText}>Go to login</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -94,68 +216,78 @@ export default function BuyerChat() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Messages</Text>
+        <View style={styles.headerDecor} />
+        <View style={styles.headerContent}>
+          <View style={styles.greetingRow}>
+            <Sparkles size={14} color="rgba(255,255,255,0.9)" />
+            <Text style={styles.greeting}>Inbox</Text>
+          </View>
+          <Text style={styles.headerTitle}>Messages</Text>
+          <Text style={styles.headerSubtitle}>
+            {conversations.length} conversation
+            {conversations.length !== 1 ? "s" : ""}
+            {totalUnread > 0 ? ` · ${totalUnread} unread` : ""}
+          </Text>
+        </View>
       </View>
 
       {conversations.length === 0 ? (
         <View style={styles.emptyState}>
-          <View style={styles.emptyIcon}>
-            <MessageSquare size={64} color={colors.textSoft} />
+          <View style={styles.emptyIconWrap}>
+            <MessageSquare size={32} color={colors.primary} />
           </View>
           <Text style={styles.emptyTitle}>No conversations yet</Text>
           <Text style={styles.emptyText}>
-            Start chatting with sellers about their items
+            Message a seller from an item page to ask about pickup times or
+            what&apos;s in a mystery bag.
           </Text>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() => router.push("/(buyer)/buyerhome")}
+          >
+            <Text style={styles.primaryButtonText}>Browse deals</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
           data={conversations}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.conversationCard}
+            <ConversationCard
+              item={item}
               onPress={() => handleOpenChat(item.id)}
-            >
-              <View style={styles.conversationContent}>
-                <View style={styles.conversationHeader}>
-                  <Text style={styles.sellerName}>{item.sellerName}</Text>
-                  {item.sellerUnreadCount > 0 && (
-                    <View style={styles.unreadBadge}>
-                      <Text style={styles.unreadBadgeText}>
-                        {item.sellerUnreadCount}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={styles.lastMessage} numberOfLines={2}>
-                  {item.lastMessage || "No messages yet"}
-                </Text>
-                <Text style={styles.timestamp}>
-                  {item.lastMessageTime
-                    ? new Date(
-                        typeof item.lastMessageTime === "object" &&
-                          "seconds" in item.lastMessageTime
-                          ? item.lastMessageTime.seconds * 1000
-                          : item.lastMessageTime instanceof Date
-                            ? item.lastMessageTime
-                            : Date.now(),
-                      ).toLocaleDateString()
-                    : ""}
-                </Text>
-              </View>
-            </TouchableOpacity>
+            />
           )}
           contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              tintColor={colors.primary}
+            />
+          }
         />
       )}
 
-      <TouchableOpacity
-        style={styles.supportButton}
-        onPress={handleReportIssue}
-      >
-        <AlertCircle size={20} color={colors.white} />
-        <Text style={styles.supportButtonText}>Report Issue</Text>
-      </TouchableOpacity>
+      <View style={styles.footer}>
+        <TouchableOpacity
+          style={styles.supportCard}
+          onPress={() =>
+            pushWithReturn(router, "/(buyer)/support", BUYER_ROUTES.chat)
+          }
+          activeOpacity={0.88}
+        >
+          <View style={styles.supportIconWrap}>
+            <Headphones size={20} color={colors.primary} />
+          </View>
+          <View style={styles.supportTextWrap}>
+            <Text style={styles.supportTitle}>Need help?</Text>
+            <Text style={styles.supportSubtitle}>Contact support</Text>
+          </View>
+          <ChevronRight size={20} color={colors.textSoft} />
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
@@ -165,114 +297,245 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  loadingWrap: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  loadingText: {
+    fontSize: 15,
+    color: colors.textSoft,
+    fontWeight: "500",
+  },
   header: {
     backgroundColor: colors.primary,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl + 4,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    overflow: "hidden",
+  },
+  headerDecor: {
+    position: "absolute",
+    top: -40,
+    right: -30,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  headerContent: { zIndex: 1 },
+  greetingRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    gap: 6,
+    marginBottom: 4,
+  },
+  greeting: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.9)",
+    fontWeight: "500",
   },
   headerTitle: {
-    fontSize: 28,
-    fontWeight: "700",
+    fontSize: 26,
+    fontWeight: "800",
     color: colors.white,
+    letterSpacing: -0.5,
+    marginBottom: 4,
   },
-
+  headerSubtitle: {
+    fontSize: 14,
+    color: "rgba(255,255,255,0.8)",
+    fontWeight: "500",
+  },
   listContent: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
   },
   conversationCard: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 16,
     padding: spacing.md,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "rgba(0,0,0,0.05)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  conversationContent: {
-    gap: spacing.sm,
+  conversationCardUnread: {
+    borderColor: "rgba(106,60,0,0.2)",
+    backgroundColor: colors.primarySoft,
   },
-  conversationHeader: {
+  avatarWrap: { position: "relative", marginRight: spacing.md },
+  avatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  avatarUnread: {
+    backgroundColor: colors.primary,
+  },
+  avatarText: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  avatarTextUnread: { color: colors.white },
+  unreadDot: {
+    position: "absolute",
+    bottom: 2,
+    right: 2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.error,
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  conversationBody: { flex: 1, minWidth: 0 },
+  conversationTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    marginBottom: 4,
+    gap: spacing.sm,
   },
   sellerName: {
+    flex: 1,
     fontSize: 16,
     fontWeight: "700",
     color: colors.text,
-    flex: 1,
   },
-  unreadBadge: {
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    marginLeft: spacing.md,
-  },
-  unreadBadgeText: {
+  sellerNameUnread: { fontWeight: "800" },
+  timestamp: {
     fontSize: 12,
+    color: colors.textSoft,
+    fontWeight: "500",
+  },
+  timestampUnread: {
+    color: colors.primary,
     fontWeight: "700",
-    color: colors.white,
+  },
+  messagePreviewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
   },
   lastMessage: {
-    fontSize: 13,
+    flex: 1,
+    fontSize: 14,
     color: colors.textSoft,
-    lineHeight: 18,
+    lineHeight: 19,
   },
-  timestamp: {
+  lastMessageUnread: {
+    color: colors.text,
+    fontWeight: "600",
+  },
+  unreadBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  unreadBadgeText: {
     fontSize: 11,
-    color: colors.textSoft,
+    fontWeight: "800",
+    color: colors.white,
   },
+  orderTag: {
+    fontSize: 11,
+    color: colors.primary,
+    fontWeight: "600",
+    marginTop: 6,
+  },
+  chevron: { marginLeft: spacing.xs },
   emptyState: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+    gap: spacing.sm,
   },
-  emptyIcon: {
-    marginBottom: spacing.md,
+  emptyIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.sm,
   },
   emptyTitle: {
     fontSize: 20,
-    fontWeight: "700",
+    fontWeight: "800",
     color: colors.text,
   },
   emptyText: {
     fontSize: 14,
     color: colors.textSoft,
     textAlign: "center",
+    lineHeight: 22,
+    marginBottom: spacing.md,
   },
-  button: {
+  primaryButton: {
     backgroundColor: colors.primary,
-    borderRadius: 12,
+    paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
+    borderRadius: 14,
+  },
+  primaryButtonText: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  footer: {
     paddingHorizontal: spacing.lg,
-    marginTop: spacing.md,
+    paddingBottom: spacing.lg,
+    paddingTop: spacing.xs,
   },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.white,
-    textAlign: "center",
-  },
-  supportButton: {
-    backgroundColor: colors.primary,
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-    paddingVertical: spacing.md,
-    borderRadius: 12,
+  supportCard: {
     flexDirection: "row",
-    gap: spacing.md,
-    justifyContent: "center",
     alignItems: "center",
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.md,
   },
-  supportButtonText: {
-    color: colors.white,
-    fontSize: 16,
+  supportIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  supportTextWrap: { flex: 1 },
+  supportTitle: {
+    fontSize: 15,
     fontWeight: "700",
+    color: colors.text,
+  },
+  supportSubtitle: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: 2,
   },
 });

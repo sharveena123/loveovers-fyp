@@ -8,7 +8,8 @@ import {
     updateSellerProfile,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { useRouter } from "expo-router";
+import { goBackToReturn, SELLER_ROUTES } from "@/src/utils/navigation";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
@@ -23,20 +24,25 @@ import {
 
 export default function SellerEditProfile() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const { user } = useAuth();
+
+  const handleBack = () =>
+    goBackToReturn(router, returnTo, SELLER_ROUTES.profile);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [contactName, setContactName] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [phone, setPhone] = useState("");
   const [businessAddress, setBusinessAddress] = useState("");
+  const [closingHour, setClosingHour] = useState("20");
 
   useEffect(() => {
     const fetchProfile = async () => {
       try {
         if (!user?.uid) {
           Alert.alert("Error", "User not authenticated");
-          router.back();
+          handleBack();
           return;
         }
 
@@ -47,6 +53,13 @@ export default function SellerEditProfile() {
           setBusinessName(sellerProfile.businessName || "");
           setPhone(sellerProfile.phone || "");
           setBusinessAddress(sellerProfile.businessAddress || "");
+          setClosingHour(
+            String(
+              sellerProfile.smartPricingClosingHour != null
+                ? sellerProfile.smartPricingClosingHour
+                : 20,
+            ),
+          );
         }
       } catch (error) {
         console.error("Error fetching profile:", error);
@@ -83,16 +96,20 @@ export default function SellerEditProfile() {
     try {
       setSaving(true);
       if (user?.uid) {
+        const h = parseInt(closingHour.trim(), 10);
+        const smartHour =
+          Number.isFinite(h) && h >= 12 && h <= 23 ? h : 20;
         await updateSellerProfile(user.uid, {
           contactName: contactName.trim(),
           businessName: businessName.trim(),
           phone: phone.trim(),
           businessAddress: businessAddress.trim(),
+          smartPricingClosingHour: smartHour,
         });
         Alert.alert("Success", "Profile updated successfully", [
           {
             text: "OK",
-            onPress: () => router.back(),
+            onPress: handleBack,
           },
         ]);
       }
@@ -121,7 +138,7 @@ export default function SellerEditProfile() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={handleBack}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />
@@ -173,6 +190,22 @@ export default function SellerEditProfile() {
             </View>
 
             <View style={styles.formGroup}>
+              <Text style={styles.label}>Smart pricing — closing hour (24h)</Text>
+              <InputField
+                value={closingHour}
+                onChangeText={(t) =>
+                  setClosingHour(t.replace(/[^0-9]/g, "").slice(0, 2))
+                }
+                placeholder="20"
+                keyboardType="number-pad"
+              />
+              <Text style={styles.helperText}>
+                Markdown ramps in the hours before this time (12–23, local time).
+                Used for live buyer prices and AI simulator defaults.
+              </Text>
+            </View>
+
+            <View style={styles.formGroup}>
               <Text style={styles.label}>Email</Text>
               <View style={[styles.disabledInput]}>
                 <Text style={styles.disabledText}>{user?.email || "N/A"}</Text>
@@ -189,7 +222,7 @@ export default function SellerEditProfile() {
             />
             <PrimaryButton
               title="Cancel"
-              onPress={() => router.back()}
+              onPress={handleBack}
               variant="outlined"
               style={{ marginTop: spacing.md }}
             />

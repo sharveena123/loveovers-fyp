@@ -8,7 +8,8 @@ import {
     updateBuyerProfile,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { useRouter } from "expo-router";
+import { BUYER_ROUTES, goBackToReturn } from "@/src/utils/navigation";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
@@ -23,7 +24,11 @@ import {
 
 export default function BuyerEditProfile() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const { user } = useAuth();
+
+  const handleBack = () =>
+    goBackToReturn(router, returnTo, BUYER_ROUTES.profile);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [fullName, setFullName] = useState("");
@@ -34,7 +39,7 @@ export default function BuyerEditProfile() {
       try {
         if (!user?.uid) {
           Alert.alert("Error", "User not authenticated");
-          router.back();
+          handleBack();
           return;
         }
 
@@ -76,7 +81,7 @@ export default function BuyerEditProfile() {
         Alert.alert("Success", "Profile updated successfully", [
           {
             text: "OK",
-            onPress: () => router.back(),
+            onPress: handleBack,
           },
         ]);
       }
@@ -105,7 +110,7 @@ export default function BuyerEditProfile() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={handleBack}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />
@@ -155,7 +160,7 @@ export default function BuyerEditProfile() {
             />
             <PrimaryButton
               title="Cancel"
-              onPress={() => router.back()}
+              onPress={handleBack}
               variant="outlined"
               style={{ marginTop: spacing.md }}
             />

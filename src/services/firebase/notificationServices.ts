@@ -850,6 +850,36 @@ export async function createPaymentSuccessNotification(
   return doc;
 }
 
+export async function createRefundProcessedNotification(
+  buyerId: string,
+  orderId: string,
+  amount: number,
+) {
+  const data = { orderId, amount };
+
+  const doc = await addDoc(collection(db, "notifications"), {
+    userId: buyerId,
+    userRole: "buyer",
+    type: "refund_processed",
+    title: "Refund processed",
+    body: `RM${amount.toFixed(2)} refunded for order #${orderId.slice(0, 8).toUpperCase()}.`,
+    data,
+    read: false,
+    createdAt: Timestamp.now(),
+    actionUrl: "/(buyer)/transactions",
+  });
+
+  await handleNotificationDelivery(
+    buyerId,
+    "refund_processed",
+    "Refund processed",
+    `RM${amount.toFixed(2)} returned to your account`,
+    data,
+  );
+
+  return doc;
+}
+
 // FETCH NOTIFICATIONS
 export async function getUserNotifications(
   userId: string,

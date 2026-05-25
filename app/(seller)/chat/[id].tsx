@@ -8,6 +8,7 @@ import {
   subscribeToMessages,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
+import { goBackToReturn, SELLER_ROUTES } from "@/src/utils/navigation";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Send, Zap } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
@@ -34,7 +35,13 @@ function getInitials(name: string) {
 
 export default function SellerChatDetail() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, returnTo } = useLocalSearchParams<{
+    id: string;
+    returnTo?: string;
+  }>();
+
+  const handleBack = () =>
+    goBackToReturn(router, returnTo, SELLER_ROUTES.chat);
   const { user, loading: authLoading } = useAuth();
   const [conversation, setConversation] = useState<{
     buyerName?: string;
@@ -123,7 +130,7 @@ export default function SellerChatDetail() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={handleBack}
             style={styles.backButton}
           >
             <ArrowLeft size={22} color={colors.white} />
@@ -151,7 +158,7 @@ export default function SellerChatDetail() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={handleBack}
             style={styles.backButton}
           >
             <ArrowLeft size={22} color={colors.white} />

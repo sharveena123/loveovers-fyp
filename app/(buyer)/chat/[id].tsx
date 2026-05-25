@@ -8,6 +8,7 @@ import {
     subscribeToMessages,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
+import { BUYER_ROUTES, goBackToReturn } from "@/src/utils/navigation";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Send } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
@@ -23,9 +24,19 @@ import {
     View,
 } from "react-native";
 
+function goBackFromChat(
+  router: ReturnType<typeof useRouter>,
+  returnTo?: string | string[],
+) {
+  goBackToReturn(router, returnTo, BUYER_ROUTES.chat);
+}
+
 export default function ChatDetail() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, returnTo } = useLocalSearchParams<{
+    id: string;
+    returnTo?: string;
+  }>();
   const { user, loading: authLoading } = useAuth();
   const [conversation, setConversation] = useState<any>(null);
   const [messages, setMessages] = useState<(Message & { id: string })[]>([]);
@@ -120,7 +131,7 @@ export default function ChatDetail() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.push("/(buyer)/buychat")}
+            onPress={() => goBackFromChat(router, returnTo)}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />
@@ -150,7 +161,7 @@ export default function ChatDetail() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.push("/(buyer)/buychat")}
+            onPress={() => goBackFromChat(router, returnTo)}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />

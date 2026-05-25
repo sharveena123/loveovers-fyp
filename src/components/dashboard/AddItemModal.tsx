@@ -4,18 +4,25 @@ import {
   ItemCategory,
 } from "@/src/services/firebase/inventoryServices";
 import { colors, spacing } from "@/src/theme/styles";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import { ExpiryPickerFields } from "@/src/components/dashboard/ExpiryPickerFields";
 import * as ImagePicker from "expo-image-picker";
 import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
+import { computeInitialListingAnchor } from "@/src/services/pricing/dynamicPricing";
 import {
-  Calendar,
+  combineExpiryAt,
+  formatIsoDate,
+  hoursUntilExpiry,
+} from "@/src/utils/inventoryFormUtils";
+import {
   ChevronDown,
-  Clock,
+  DollarSign,
   Package,
+  Sparkles,
+  Tag,
   Upload,
   X,
 } from "lucide-react-native";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,6 +31,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -55,7 +63,9 @@ export function AddItemModal({
   const [name, setName] = useState("");
   const [category, setCategory] = useState<ItemCategory>("Bakery");
   const [quantity, setQuantity] = useState("1");
-  const [price, setPrice] = useState("0.00");
+  const [retailPrice, setRetailPrice] = useState("");
+  const [salePrice, setSalePrice] = useState("");
+  const [useSmartPricing, setUseSmartPricing] = useState(false);
   const [expiryDate, setExpiryDate] = useState(new Date());
   const [expiryTime, setExpiryTime] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -63,61 +73,37 @@ export function AddItemModal({
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const expiryAt = useMemo(
+    () => combineExpiryAt(expiryDate, expiryTime),
+    [expiryDate, expiryTime],
+  );
+
+  const autoSalePreview = useMemo(() => {
+    const retail = parseFloat(retailPrice);
+    if (!useSmartPricing || !Number.isFinite(retail) || retail <= 0) return null;
+    return computeInitialListingAnchor(retail, hoursUntilExpiry(expiryAt));
+  }, [retailPrice, useSmartPricing, expiryAt]);
+
   const resetForm = () => {
     setName("");
     setCategory("Bakery");
     setQuantity("1");
-    setPrice("0.00");
+    setRetailPrice("");
+    setSalePrice("");
+    setUseSmartPricing(false);
     setExpiryDate(new Date());
     setExpiryTime(new Date());
     setImageUri(null);
   };
 
-  const formatDate = (date: Date) => {
-    const day = date.getDate().toString().padStart(2, "0");
-    const month = (date.getMonth() + 1).toString().padStart(2, "0");
-    const year = date.getFullYear();
-    return `${day}/${month}/${year}`;
+  const onDateChange = (event: { type?: string }, selectedDate?: Date) => {
+    if (Platform.OS === "android") setShowDatePicker(false);
+    if (selectedDate && event.type !== "dismissed") setExpiryDate(selectedDate);
   };
 
-  const formatTime = (date: Date) => {
-    let hours = date.getHours();
-    const minutes = date.getMinutes().toString().padStart(2, "0");
-    const ampm = hours >= 12 ? "PM" : "AM";
-    hours = hours % 12 || 12;
-    return `${hours}:${minutes} ${ampm}`;
-  };
-
-  const formatDateForFirebase = (date: Date) => {
-    const year = date.getFullYear();
-    const month = (date.getMonth() + 1).toString().padStart(2, "0");
-    const day = date.getDate().toString().padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  };
-
-  const formatTimeForFirebase = (date: Date) => {
-    const hours = date.getHours().toString().padStart(2, "0");
-    const minutes = date.getMinutes().toString().padStart(2, "0");
-    const seconds = "00";
-    return `${hours}:${minutes}:${seconds}`;
-  };
-
-  const onDateChange = (event: any, selectedDate?: Date) => {
-    if (Platform.OS === "android") {
-      setShowDatePicker(false);
-    }
-    if (selectedDate && event.type !== "dismissed") {
-      setExpiryDate(selectedDate);
-    }
-  };
-
-  const onTimeChange = (event: any, selectedTime?: Date) => {
-    if (Platform.OS === "android") {
-      setShowTimePicker(false);
-    }
-    if (selectedTime && event.type !== "dismissed") {
-      setExpiryTime(selectedTime);
-    }
+  const onTimeChange = (event: { type?: string }, selectedTime?: Date) => {
+    if (Platform.OS === "android") setShowTimePicker(false);
+    if (selectedTime && event.type !== "dismissed") setExpiryTime(selectedTime);
   };
 
   const pickImage = async () => {
@@ -162,9 +148,22 @@ export function AddItemModal({
       return;
     }
 
-    if (!price || parseFloat(price) <= 0) {
-      Alert.alert("Error", "Please enter valid price");
+    const retail = parseFloat(retailPrice);
+    if (!Number.isFinite(retail) || retail <= 0) {
+      Alert.alert("Error", "Please enter a valid retail value");
       return;
+    }
+
+    if (!useSmartPricing) {
+      const sale = parseFloat(salePrice);
+      if (!Number.isFinite(sale) || sale <= 0) {
+        Alert.alert("Error", "Please enter a valid sale price");
+        return;
+      }
+      if (sale >= retail) {
+        Alert.alert("Error", "Sale price must be less than retail value");
+        return;
+      }
     }
 
     setLoading(true);
@@ -175,13 +174,20 @@ export function AddItemModal({
         imageUrl = await uploadImage(imageUri);
       }
 
+      const listFloor = useSmartPricing
+        ? computeInitialListingAnchor(retail, hoursUntilExpiry(expiryAt))
+        : parseFloat(salePrice);
+
       await inventoryService.addItem(sellerId, {
         name: name.trim(),
         category,
-        quantity: parseInt(quantity),
-        price: parseFloat(price),
-        expiryDate: formatDateForFirebase(expiryDate),
-        expiryTime: formatTimeForFirebase(expiryTime),
+        quantity: parseInt(quantity, 10),
+        price: listFloor,
+        originalPrice: retail,
+        discountedPrice: listFloor,
+        smartPricingEnabled: useSmartPricing,
+        expiryDate: formatIsoDate(expiryDate),
+        expiryAt,
         imageUrl,
       });
 
@@ -212,8 +218,10 @@ export function AddItemModal({
               <Package size={24} color={colors.white} />
             </View>
             <View style={styles.headerText}>
-              <Text style={styles.title}>Add Inventory Item</Text>
-              <Text style={styles.subtitle}>Add new items to your stock</Text>
+              <Text style={styles.title}>Add surplus item</Text>
+              <Text style={styles.subtitle}>
+                List a single product — optional smart pricing
+              </Text>
             </View>
             <TouchableOpacity
               onPress={() => onOpenChange(false)}
@@ -262,68 +270,124 @@ export function AddItemModal({
               />
             </View>
 
-            {/* Quantity and Price */}
+            {/* Smart pricing */}
+            <View style={styles.smartCard}>
+              <View style={styles.smartRow}>
+                <View style={styles.smartIconWrap}>
+                  <Sparkles size={20} color={colors.primary} />
+                </View>
+                <View style={styles.smartTextWrap}>
+                  <Text style={styles.smartTitle}>Smart auto-pricing</Text>
+                  <Text style={styles.smartDesc}>
+                    When on, buyer price adjusts from expiry, stock left, and
+                    closing time. Off = fixed sale price you set.
+                  </Text>
+                </View>
+                <Switch
+                  value={useSmartPricing}
+                  onValueChange={setUseSmartPricing}
+                  trackColor={{ false: "#ccc", true: colors.primary }}
+                  thumbColor="#fff"
+                />
+              </View>
+            </View>
+
+            {/* Quantity */}
+            <View style={styles.field}>
+              <Text style={styles.label}>Quantity in stock *</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="1"
+                value={quantity}
+                onChangeText={(t) => setQuantity(t.replace(/[^0-9]/g, ""))}
+                keyboardType="number-pad"
+                placeholderTextColor={colors.textSoft}
+              />
+            </View>
+
+            {/* Retail & sale */}
             <View style={styles.row}>
               <View
                 style={[styles.field, { flex: 1, marginRight: spacing.sm }]}
               >
-                <Text style={styles.label}>Quantity *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="1"
-                  value={quantity}
-                  onChangeText={setQuantity}
-                  keyboardType="number-pad"
-                  placeholderTextColor={colors.textSoft}
-                />
-              </View>
-
-              <View style={[styles.field, { flex: 1, marginLeft: spacing.sm }]}>
-                <Text style={styles.label}>Original Price *</Text>
+                <View style={styles.labelRow}>
+                  <Tag size={16} color={colors.text} />
+                  <Text style={styles.label}>Retail value *</Text>
+                </View>
                 <View style={styles.priceInput}>
                   <Text style={styles.dollarSign}>RM</Text>
                   <TextInput
                     style={styles.priceInputField}
                     placeholder="0.00"
-                    value={price}
-                    onChangeText={setPrice}
+                    value={retailPrice}
+                    onChangeText={(t) =>
+                      setRetailPrice(t.replace(/[^0-9.]/g, ""))
+                    }
                     keyboardType="decimal-pad"
                     placeholderTextColor={colors.textSoft}
                   />
                 </View>
               </View>
-            </View>
-
-            {/* Expiry Date and Time */}
-            <View style={styles.row}>
-              <View
-                style={[styles.field, { flex: 1, marginRight: spacing.sm }]}
-              >
-                <Text style={styles.label}>Expiry Date *</Text>
-                <TouchableOpacity
-                  style={styles.dateTimeButton}
-                  onPress={() => setShowDatePicker(true)}
-                >
-                  <Calendar size={18} color={colors.textSoft} />
-                  <Text style={styles.dateTimeText}>
-                    {formatDate(expiryDate)}
-                  </Text>
-                </TouchableOpacity>
-              </View>
 
               <View style={[styles.field, { flex: 1, marginLeft: spacing.sm }]}>
-                <Text style={styles.label}>Expiry Time *</Text>
-                <TouchableOpacity
-                  style={styles.dateTimeButton}
-                  onPress={() => setShowTimePicker(true)}
-                >
-                  <Clock size={18} color={colors.textSoft} />
-                  <Text style={styles.dateTimeText}>
-                    {formatTime(expiryTime)}
+                <View style={styles.labelRow}>
+                  <DollarSign size={16} color={colors.primary} />
+                  <Text style={styles.label}>
+                    {useSmartPricing ? "Opening sale (auto)" : "Sale price *"}
                   </Text>
-                </TouchableOpacity>
+                </View>
+                <View
+                  style={[
+                    styles.priceInput,
+                    useSmartPricing && styles.priceInputDisabled,
+                  ]}
+                >
+                  <Text style={styles.dollarSign}>RM</Text>
+                  <TextInput
+                    style={styles.priceInputField}
+                    placeholder={useSmartPricing ? "Auto" : "0.00"}
+                    value={
+                      useSmartPricing
+                        ? autoSalePreview != null
+                          ? String(autoSalePreview)
+                          : "—"
+                        : salePrice
+                    }
+                    onChangeText={(t) =>
+                      setSalePrice(t.replace(/[^0-9.]/g, ""))
+                    }
+                    keyboardType="decimal-pad"
+                    editable={!useSmartPricing}
+                    placeholderTextColor={colors.textSoft}
+                  />
+                </View>
+                {useSmartPricing ? (
+                  <Text style={styles.fieldHint}>
+                    Live price updates for buyers after you publish
+                  </Text>
+                ) : null}
               </View>
             </View>
+
+            <ExpiryPickerFields
+              expiryDate={expiryDate}
+              expiryTime={expiryTime}
+              showDatePicker={showDatePicker}
+              showTimePicker={showTimePicker}
+              onOpenDate={() => {
+                setShowTimePicker(false);
+                setShowDatePicker((v) => !v);
+              }}
+              onOpenTime={() => {
+                setShowDatePicker(false);
+                setShowTimePicker((v) => !v);
+              }}
+              onCloseDate={() => setShowDatePicker(false)}
+              onCloseTime={() => setShowTimePicker(false)}
+              onDateChange={onDateChange}
+              onTimeChange={onTimeChange}
+              disabled={loading}
+            />
 
             {/* Image Upload */}
             <View style={styles.field}>
@@ -344,22 +408,21 @@ export function AddItemModal({
               </TouchableOpacity>
             </View>
 
-            {/* Info Box */}
+            {/* Tips */}
             <View style={styles.infoBox}>
-              <Text style={styles.infoIcon}>📦</Text>
+              <Text style={styles.infoIcon}>💡</Text>
               <View style={styles.infoContent}>
-                <Text style={styles.infoTitle}>Auto-Management Features:</Text>
+                <Text style={styles.infoTitle}>Tips</Text>
                 <Text style={styles.infoText}>
-                  • Stock automatically updates when used in mystery bags
+                  • Mystery bags are best for mixed surplus — use this form for
+                  single SKUs
                 </Text>
                 <Text style={styles.infoText}>
-                  • Items auto-expire based on date & time
+                  • Smart pricing is off by default for items; turn on to skip
+                  manual discount updates
                 </Text>
                 <Text style={styles.infoText}>
-                  • Low stock alerts when quantity drops below 5
-                </Text>
-                <Text style={styles.infoText}>
-                  • Expired items removed from active inventory
+                  • Stock counts down when sold or bundled into bags
                 </Text>
               </View>
             </View>
@@ -391,68 +454,6 @@ export function AddItemModal({
           </View>
         </View>
 
-        {/* Date Picker Modal - Only shows when clicked */}
-        {showDatePicker && (
-          <Modal transparent visible={showDatePicker} animationType="fade">
-            <View style={styles.pickerOverlay}>
-              <View style={styles.pickerContainer}>
-                <View style={styles.pickerHeader}>
-                  <Text style={styles.pickerTitle}>Select Expiry Date</Text>
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                    <X size={24} color={colors.text} />
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  value={expiryDate}
-                  mode="date"
-                  display={Platform.OS === "ios" ? "spinner" : "default"}
-                  onChange={onDateChange}
-                  minimumDate={new Date()}
-                  style={styles.picker}
-                />
-                {Platform.OS === "ios" && (
-                  <TouchableOpacity
-                    style={styles.pickerDoneButton}
-                    onPress={() => setShowDatePicker(false)}
-                  >
-                    <Text style={styles.pickerDoneText}>Done</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </Modal>
-        )}
-
-        {/* Time Picker Modal - Only shows when clicked */}
-        {showTimePicker && (
-          <Modal transparent visible={showTimePicker} animationType="fade">
-            <View style={styles.pickerOverlay}>
-              <View style={styles.pickerContainer}>
-                <View style={styles.pickerHeader}>
-                  <Text style={styles.pickerTitle}>Select Expiry Time</Text>
-                  <TouchableOpacity onPress={() => setShowTimePicker(false)}>
-                    <X size={24} color={colors.text} />
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker
-                  value={expiryTime}
-                  mode="time"
-                  display={Platform.OS === "ios" ? "spinner" : "default"}
-                  onChange={onTimeChange}
-                  style={styles.picker}
-                />
-                {Platform.OS === "ios" && (
-                  <TouchableOpacity
-                    style={styles.pickerDoneButton}
-                    onPress={() => setShowTimePicker(false)}
-                  >
-                    <Text style={styles.pickerDoneText}>Done</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </Modal>
-        )}
       </View>
     </Modal>
   );
@@ -570,22 +571,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.text,
   },
-  dateTimeButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
-    gap: spacing.sm,
-    backgroundColor: colors.white,
-  },
-  dateTimeText: {
-    fontSize: 15,
-    color: colors.text,
-    flex: 1,
-  },
   uploadBox: {
     borderWidth: 2,
     borderColor: colors.border,
@@ -668,43 +653,53 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.white,
   },
-  pickerOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  pickerContainer: {
-    backgroundColor: colors.white,
-    borderRadius: 16,
-    padding: spacing.lg,
-    width: "85%",
-    maxWidth: 400,
-  },
-  pickerHeader: {
+  labelRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
+  smartCard: {
+    backgroundColor: "#FFFBF5",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(106,60,0,0.2)",
+    padding: spacing.md,
     marginBottom: spacing.md,
   },
-  pickerTitle: {
-    fontSize: 18,
-    fontWeight: "600",
+  smartRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  smartIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  smartTextWrap: {
+    flex: 1,
+  },
+  smartTitle: {
+    fontSize: 15,
+    fontWeight: "700",
     color: colors.text,
   },
-  picker: {
-    width: "100%",
+  smartDesc: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: 4,
+    lineHeight: 17,
   },
-  pickerDoneButton: {
-    backgroundColor: colors.primary,
-    padding: spacing.md,
-    borderRadius: 8,
-    alignItems: "center",
-    marginTop: spacing.md,
+  priceInputDisabled: {
+    backgroundColor: colors.backgroundSoft,
   },
-  pickerDoneText: {
-    color: colors.white,
-    fontSize: 16,
-    fontWeight: "600",
+  fieldHint: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: 4,
   },
 });

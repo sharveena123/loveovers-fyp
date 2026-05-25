@@ -1,4 +1,5 @@
 import { SellerAddMenu } from "@/src/components/seller/SellerAddMenu";
+import { SellerInventoryRefreshProvider } from "@/src/contexts/SellerInventoryRefresh";
 import { colors } from "@/src/theme/styles";
 import { BottomTabBarButtonProps } from "@react-navigation/bottom-tabs";
 import { Tabs } from "expo-router";
@@ -43,7 +44,7 @@ export default function TabsLayout() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   return (
-    <>
+    <SellerInventoryRefreshProvider>
       <Tabs
         screenOptions={{
           headerShown: false,
@@ -117,7 +118,7 @@ export default function TabsLayout() {
       </Tabs>
 
       <SellerAddMenu visible={menuOpen} onClose={() => setMenuOpen(false)} />
-    </>
+    </SellerInventoryRefreshProvider>
   );
 }
 

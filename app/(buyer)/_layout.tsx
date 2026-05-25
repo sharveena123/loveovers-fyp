@@ -136,6 +136,20 @@ export default function BuyerLayout() {
           title: "",
         }}
       />
+      <Tabs.Screen
+        name="transactions"
+        options={{
+          href: null,
+          title: "",
+        }}
+      />
+      <Tabs.Screen
+        name="refunds"
+        options={{
+          href: null,
+          title: "",
+        }}
+      />
     </Tabs>
   );
 }

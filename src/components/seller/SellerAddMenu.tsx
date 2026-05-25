@@ -1,6 +1,7 @@
 import { AddBagModal } from "@/src/components/dashboard/AddBagModal";
 import { AddItemModal } from "@/src/components/dashboard/AddItemModal";
 import { Text } from "@/src/components/StyledText";
+import { useSellerInventoryRefresh } from "@/src/contexts/SellerInventoryRefresh";
 import { auth } from "@/src/services/firebase/config";
 import { colors, spacing } from "@/src/theme/styles";
 import { Package, ShoppingBag } from "lucide-react-native";
@@ -22,6 +23,11 @@ export function SellerAddMenu({ visible, onClose }: SellerAddMenuProps) {
   const [showAddItemModal, setShowAddItemModal] = useState(false);
   const [showAddBagModal, setShowAddBagModal] = useState(false);
   const sellerId = auth.currentUser?.uid;
+  const inventoryRefresh = useSellerInventoryRefresh();
+
+  const handleInventoryAdded = () => {
+    inventoryRefresh?.notifyInventoryChanged();
+  };
 
   const handleAddItem = () => {
     onClose();
@@ -78,12 +84,19 @@ export function SellerAddMenu({ visible, onClose }: SellerAddMenuProps) {
             open={showAddItemModal}
             onOpenChange={setShowAddItemModal}
             sellerId={sellerId}
+            onSuccess={() => {
+              setShowAddItemModal(false);
+              handleInventoryAdded();
+            }}
           />
           <AddBagModal
             open={showAddBagModal}
             onOpenChange={setShowAddBagModal}
             sellerId={sellerId}
-            onSuccess={() => setShowAddBagModal(false)}
+            onSuccess={() => {
+              setShowAddBagModal(false);
+              handleInventoryAdded();
+            }}
           />
         </>
       )}

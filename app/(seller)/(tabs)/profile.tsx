@@ -7,6 +7,8 @@ import {
   updateSellerSettings,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
+import { formatCo2, formatCurrency } from "@/src/utils/impactMetrics";
+import { pushWithReturn, SELLER_ROUTES } from "@/src/utils/navigation";
 import { router, useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import {
@@ -119,7 +121,7 @@ export default function ProfileScreen() {
   const loadProfile = useCallback(async () => {
     const user = auth.currentUser;
     if (!user) {
-      router.replace("/(auth)/login");
+      router.replace("/");
       return;
     }
 
@@ -192,7 +194,7 @@ export default function ProfileScreen() {
         onPress: async () => {
           try {
             await signOut(auth);
-            router.replace("/(auth)/login");
+            router.replace("/");
           } catch (error) {
             console.error("Logout error:", error);
             Alert.alert("Error", "Failed to logout");
@@ -256,7 +258,13 @@ export default function ProfileScreen() {
                   </Text>
                   <TouchableOpacity
                     style={styles.editBtn}
-                    onPress={() => router.push("/(seller)/sellereditprofile")}
+                    onPress={() =>
+                  pushWithReturn(
+                    router,
+                    "/(seller)/sellereditprofile",
+                    SELLER_ROUTES.profile,
+                  )
+                }
                   >
                     <Edit2 size={16} color={colors.primary} />
                   </TouchableOpacity>
@@ -308,7 +316,7 @@ export default function ProfileScreen() {
               icon={<Leaf size={18} color={colors.success} />}
               iconBg={colors.successSoft}
               value={`${stats.savedPercentage}%`}
-              label="Saved"
+              label="Rescue rate"
               valueColor={colors.success}
               accentColor={colors.success}
             />
@@ -319,7 +327,13 @@ export default function ProfileScreen() {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Operating hours</Text>
               <TouchableOpacity
-                onPress={() => router.push("/(seller)/sellereditprofile")}
+                onPress={() =>
+                  pushWithReturn(
+                    router,
+                    "/(seller)/sellereditprofile",
+                    SELLER_ROUTES.profile,
+                  )
+                }
               >
                 <Text style={styles.editLink}>Edit</Text>
               </TouchableOpacity>
@@ -394,7 +408,13 @@ export default function ProfileScreen() {
                 iconBg={colors.primarySoft}
                 title="Business analytics"
                 subtitle="Reports and insights"
-                onPress={() => router.push("/(seller)/analytics")}
+                onPress={() =>
+                  pushWithReturn(
+                    router,
+                    "/(seller)/analytics",
+                    SELLER_ROUTES.profile,
+                  )
+                }
               />
             </View>
           </View>
@@ -407,14 +427,26 @@ export default function ProfileScreen() {
                 icon={<Settings size={20} color="#666" />}
                 iconBg="#f0f0f0"
                 title="Account settings"
-                onPress={() => router.push("/(seller)/sellereditprofile")}
+                onPress={() =>
+                  pushWithReturn(
+                    router,
+                    "/(seller)/sellereditprofile",
+                    SELLER_ROUTES.profile,
+                  )
+                }
               />
               <View style={styles.divider} />
               <MenuRow
                 icon={<HelpCircle size={20} color={colors.primary} />}
                 iconBg={colors.primarySoft}
                 title="Help & support"
-                onPress={() => router.push("/(seller)/support")}
+                onPress={() =>
+                  pushWithReturn(
+                    router,
+                    "/(seller)/support",
+                    SELLER_ROUTES.profile,
+                  )
+                }
               />
               <View style={styles.divider} />
               <MenuRow
@@ -447,27 +479,33 @@ export default function ProfileScreen() {
             <View style={styles.impactGrid}>
               <View style={styles.impactItem}>
                 <Text style={styles.impactValue}>
-                  {stats.mealsSaved.toLocaleString()}
+                  {Math.round(stats.mealsSaved).toLocaleString()}
                 </Text>
-                <Text style={styles.impactLabel}>Meals saved</Text>
-              </View>
-              <View style={styles.impactItem}>
-                <Text style={styles.impactValue}>{stats.co2Reduced}T</Text>
-                <Text style={styles.impactLabel}>CO₂ reduced</Text>
+                <Text style={styles.impactLabel}>Meals rescued</Text>
               </View>
               <View style={styles.impactItem}>
                 <Text style={styles.impactValue}>
-                  RM {(stats.revenueSaved / 1000).toFixed(1)}K
+                  {formatCo2(stats.co2SavedKg)}
                 </Text>
-                <Text style={styles.impactLabel}>Revenue saved</Text>
+                <Text style={styles.impactLabel}>CO₂ avoided</Text>
+              </View>
+              <View style={styles.impactItem}>
+                <Text style={styles.impactValue}>
+                  {formatCurrency(stats.revenueSaved)}
+                </Text>
+                <Text style={styles.impactLabel}>Rescue revenue</Text>
               </View>
               <View style={styles.impactItem}>
                 <Text style={[styles.impactValue, { color: colors.success }]}>
-                  {stats.wasteDown}%
+                  {stats.savedPercentage}%
                 </Text>
-                <Text style={styles.impactLabel}>Waste down</Text>
+                <Text style={styles.impactLabel}>Stock rescued</Text>
               </View>
             </View>
+            <Text style={styles.impactFootnote}>
+              {stats.itemsSold} items sold · {stats.foodSavedKg} kg food diverted
+              · {stats.wasteDown}% less waste vs listed stock
+            </Text>
           </View>
 
           {/* Logout */}
@@ -847,6 +885,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSoft,
     fontWeight: "500",
+    textAlign: "center",
+  },
+  impactFootnote: {
+    fontSize: 12,
+    color: colors.textSoft,
+    lineHeight: 18,
+    marginTop: spacing.sm,
     textAlign: "center",
   },
   logoutButton: {

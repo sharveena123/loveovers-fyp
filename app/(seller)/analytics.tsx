@@ -7,7 +7,8 @@ import {
 import { auth } from "@/src/services/firebase/config";
 import { getUserProfile, SellerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { router, useFocusEffect } from "expo-router";
+import { goBackToReturn, SELLER_ROUTES } from "@/src/utils/navigation";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import {
   ArrowLeft,
   BarChart3,
@@ -36,6 +37,10 @@ const { width: SCREEN_W } = Dimensions.get("window");
 const CHART_W = SCREEN_W - spacing.lg * 2 - spacing.lg * 2;
 
 export default function Analytics() {
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
+  const handleBack = () =>
+    goBackToReturn(router, returnTo, SELLER_ROUTES.profile);
+
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [bundle, setBundle] = useState<DatasetAnalyticsBundle | null>(null);
@@ -46,7 +51,7 @@ export default function Analytics() {
     try {
       const user = auth.currentUser;
       if (!user) {
-        router.back();
+        handleBack();
         return;
       }
       const profile = (await getUserProfile(user.uid)) as SellerProfile | null;
@@ -104,7 +109,7 @@ export default function Analytics() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
         >
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
             <ArrowLeft size={22} color={colors.primary} />
           </TouchableOpacity>
           <View style={styles.emptyCard}>
@@ -137,7 +142,7 @@ export default function Analytics() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
         >
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
             <ArrowLeft size={22} color={colors.primary} />
           </TouchableOpacity>
           <View style={styles.emptyCard}>
@@ -172,7 +177,7 @@ export default function Analytics() {
         }
       >
         <View style={styles.headerCurve}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+          <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
             <ArrowLeft size={22} color={colors.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Business Analytics</Text>

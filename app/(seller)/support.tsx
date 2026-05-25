@@ -6,7 +6,8 @@ import {
   Issue,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
-import { useFocusEffect, useRouter } from "expo-router";
+import { goBackToReturn, SELLER_ROUTES } from "@/src/utils/navigation";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import {
   AlertCircle,
   ArrowLeft,
@@ -38,7 +39,11 @@ const ISSUE_TYPES = [
 
 export default function SellerSupport() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const { user, loading: authLoading } = useAuth();
+
+  const handleBack = () =>
+    goBackToReturn(router, returnTo, SELLER_ROUTES.profile);
   const [issues, setIssues] = useState<(Issue & { id: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -151,7 +156,7 @@ export default function SellerSupport() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
+            onPress={handleBack}
             style={styles.backButton}
           >
             <ArrowLeft size={24} color={colors.white} />
@@ -176,7 +181,7 @@ export default function SellerSupport() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => router.push("/(seller)/(tabs)/sellerchat")}
+          onPress={handleBack}
           style={styles.backButton}
         >
           <ArrowLeft size={24} color={colors.white} />

@@ -2,6 +2,7 @@
 import {
   AssessmentUpdateResponse,
   BatchPredictionResponse,
+  CafeDatasetApiResponse,
   CafeDatasetResponse,
   CafeInfo,
   DatasetAssessment,
@@ -9,11 +10,14 @@ import {
   DayOfWeek,
   PredictionRequest,
   PredictionResponse,
+  RecordDailySalesRequest,
+  RecordDailySalesResponse,
+  RetrainResult,
   TrainingResult,
   Weather,
 } from "./types";
 
-const BASE_URL = "http://192.168.100.70:5000";
+const BASE_URL = "http://192.168.1.6:5000";
 
 const postFormData = async <T>(
   path: string,
@@ -168,14 +172,48 @@ const normalizeDatasetRecords = (payload: unknown): DatasetRow[] => {
   return raw.filter((row) => row && typeof row === "object") as DatasetRow[];
 };
 
-/** Fetch training CSV rows from the AI backend (tries common paths). */
+const mapRecentSalesToRecords = (rows: DatasetRow[]): DatasetRow[] =>
+  rows.map((row) => ({
+    date: row.date ?? row.sale_date,
+    item: row.item ?? row.product ?? row.item_name,
+    sold_qty: row.sold_qty ?? row.sold ?? row.quantity,
+    produced_qty: row.produced_qty ?? row.produced,
+    price: row.price,
+    day_of_week: row.day_of_week,
+    weather: row.weather,
+    discount_pct: row.discount_pct ?? row.discount,
+    source: row.source,
+  }));
+
+/** Fetch stored sales history from the AI backend. */
 export const getCafeDataset = async (
   cafeId: string,
 ): Promise<CafeDatasetResponse | null> => {
+  try {
+    const res = await getJson<CafeDatasetApiResponse>(
+      `/cafe/${cafeId}/dataset`,
+    );
+    const recent = mapRecentSalesToRecords(res.recent_sales || []);
+    const summary = res.summary ?? { total_rows: recent.length };
+
+    return {
+      cafe_id: res.cafe_id ?? cafeId,
+      cafe_name: res.cafe_name ?? cafeId,
+      records: recent,
+      summary: {
+        total_rows: summary.total_rows ?? recent.length,
+        items: res.items,
+        date_start: undefined,
+        date_end: undefined,
+      },
+    };
+  } catch {
+    // fall through to legacy paths
+  }
+
   const paths = [
     `/cafe/${cafeId}/data`,
     `/cafe/${cafeId}/records`,
-    `/cafe/${cafeId}/dataset`,
     `/cafe/${cafeId}/analytics`,
   ];
 
@@ -201,20 +239,21 @@ export const getCafeDataset = async (
     }
   }
 
-  try {
-    const cafe = await getCafeInfo(cafeId);
-    const records = normalizeDatasetRecords(cafe as unknown as Record<string, unknown>);
-    if (records.length > 0) {
-      return {
-        cafe_id: cafe.cafe_id,
-        cafe_name: cafe.cafe_name,
-        records,
-        summary: { total_rows: records.length, r2: cafe.r2 },
-      };
-    }
-  } catch {
-    // no embedded records on cafe info
-  }
-
   return null;
+};
+
+/** Record manual daily sales (merges with uploaded CSV history). */
+export const recordDailySales = async (
+  cafeId: string,
+  payload: RecordDailySalesRequest,
+): Promise<RecordDailySalesResponse> => {
+  return postJson<RecordDailySalesResponse>(
+    `/cafe/${cafeId}/daily-sales`,
+    payload,
+  );
+};
+
+/** Retrain model from all sales stored in the backend database. */
+export const retrainCafe = async (cafeId: string): Promise<RetrainResult> => {
+  return postJson<RetrainResult>(`/cafe/${cafeId}/retrain`, {});
 };

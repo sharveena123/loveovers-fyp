@@ -1,12 +1,14 @@
 // src/services/firebase/orders.ts
 import {
-    collection,
-    doc,
-    getDoc,
-    getDocs,
-    setDoc,
-    Timestamp,
-    updateDoc,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  setDoc,
+  Timestamp,
+  updateDoc,
+  where,
 } from "firebase/firestore";
 import { db } from "./config";
 
@@ -18,6 +20,8 @@ export interface OrderItem {
   sellerId: string;
   sellerName: string;
   imageUrl?: string;
+  originalPrice?: number;
+  type?: "bag" | "item";
 }
 
 export interface ShippingAddress {
@@ -39,9 +43,21 @@ export interface BuyerOrder {
   discount?: number;
   shippingAddress: ShippingAddress;
   paymentIntentId: string;
-  paymentStatus: "pending" | "succeeded" | "failed" | "canceled";
+  paymentStatus:
+    | "pending"
+    | "succeeded"
+    | "failed"
+    | "canceled"
+    | "refund_pending"
+    | "refunded";
+  refundStatus?: "none" | "requested" | "processing" | "approved" | "rejected" | "refunded";
+  refundReason?: string;
+  refundRequestedAt?: Timestamp | Date;
+  refundedAt?: Timestamp | Date;
+  refundedAmount?: number;
   orderStatus:
     | "pending"
+    | "ready"
     | "confirmed"
     | "processing"
     | "shipped"
@@ -83,7 +99,10 @@ export const createOrderFromCart = async (
         postalCode: shippingAddress?.postalCode || "",
       },
       paymentIntentId: paymentIntentId || "",
-      paymentStatus: "pending",
+      paymentStatus: paymentIntentId?.startsWith("pi_test")
+        ? "succeeded"
+        : "pending",
+      refundStatus: "none",
       orderStatus: "pending",
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
@@ -148,14 +167,123 @@ export const createOrderFromCart = async (
   }
 };
 
-// Get buyer orders
+/** Combine multiple seller-side statuses for one buyer checkout. */
+function aggregateSellerStatuses(
+  statuses: string[],
+): BuyerOrder["orderStatus"] | null {
+  const normalized = statuses.map((s) => String(s || "pending").toLowerCase());
+  if (!normalized.length) return null;
+  if (normalized.every((s) => s === "cancelled")) return "cancelled";
+  if (normalized.every((s) => s === "completed")) return "delivered";
+  if (normalized.every((s) => s === "pending")) return "pending";
+  if (normalized.some((s) => s === "ready" || s === "confirmed")) return "ready";
+  return sellerStatusToBuyerOrderStatus(normalized[0]);
+}
+
+function appendSellerStatus(
+  map: Map<string, string[]>,
+  buyerOrderId: string,
+  status: string,
+) {
+  if (!buyerOrderId) return;
+  const existing = map.get(buyerOrderId) ?? [];
+  existing.push(status);
+  map.set(buyerOrderId, existing);
+}
+
+async function fetchSellerStatusesByBuyerOrderId(
+  buyerId: string,
+  sellerIds: string[],
+  buyerOrderIds: string[],
+): Promise<Map<string, string[]>> {
+  const byBuyerOrderId = new Map<string, string[]>();
+
+  for (const sellerId of sellerIds) {
+    const col = collection(db, "sellers", sellerId, "orders");
+    const [byBuyerIdSnap, byCustomerIdSnap] = await Promise.all([
+      getDocs(query(col, where("buyerId", "==", buyerId))),
+      getDocs(query(col, where("customerId", "==", buyerId))),
+    ]);
+
+    const seenDocIds = new Set<string>();
+    for (const snap of [byBuyerIdSnap, byCustomerIdSnap]) {
+      for (const orderDoc of snap.docs) {
+        if (seenDocIds.has(orderDoc.id)) continue;
+        seenDocIds.add(orderDoc.id);
+
+        const data = orderDoc.data();
+        appendSellerStatus(
+          byBuyerOrderId,
+          String(data.orderId || ""),
+          String(data.status || "pending"),
+        );
+      }
+    }
+
+    // Fallback: match seller docs by buyer order id (legacy / mock data)
+    for (const buyerOrderId of buyerOrderIds) {
+      const byOrderIdSnap = await getDocs(
+        query(col, where("orderId", "==", buyerOrderId)),
+      );
+      for (const orderDoc of byOrderIdSnap.docs) {
+        appendSellerStatus(
+          byBuyerOrderId,
+          buyerOrderId,
+          String(orderDoc.data().status || "pending"),
+        );
+      }
+    }
+  }
+
+  return byBuyerOrderId;
+}
+
+/** Mirror seller order status onto buyer orders (read + optional self-heal write). */
+async function enrichBuyerOrdersFromSellerStatus(
+  buyerId: string,
+  orders: BuyerOrder[],
+): Promise<BuyerOrder[]> {
+  const sellerIds = [
+    ...new Set(
+      orders.flatMap((o) =>
+        (o.items ?? []).map((i) => i.sellerId).filter(Boolean),
+      ),
+    ),
+  ];
+  if (!sellerIds.length) return orders;
+
+  const statusMap = await fetchSellerStatusesByBuyerOrderId(
+    buyerId,
+    sellerIds,
+    orders.map((o) => o.id),
+  );
+
+  return Promise.all(
+    orders.map(async (order) => {
+      const sellerStatuses = statusMap.get(order.id);
+      if (!sellerStatuses?.length) return order;
+
+      const aggregated = aggregateSellerStatuses(sellerStatuses);
+      if (!aggregated || aggregated === order.orderStatus) return order;
+
+      updateBuyerOrderStatus(buyerId, order.id, { orderStatus: aggregated }).catch(
+        (err) => console.warn("Could not persist buyer order status:", err),
+      );
+
+      return { ...order, orderStatus: aggregated };
+    }),
+  );
+}
+
+// Get buyer orders (status synced from sellers/{sellerId}/orders)
 export const getBuyerOrders = async (userId: string): Promise<BuyerOrder[]> => {
   try {
     const ordersCol = collection(db, "users", userId, "orders");
     const snapshot = await getDocs(ordersCol);
-    return snapshot.docs.map(
-      (doc) => ({ id: doc.id, ...doc.data() }) as BuyerOrder,
+    const orders = snapshot.docs.map(
+      (orderDoc) => ({ id: orderDoc.id, ...orderDoc.data() }) as BuyerOrder,
     );
+    return enrichBuyerOrdersFromSellerStatus(userId, orders);
   } catch (error) {
     console.error("Error getting buyer orders:", error);
     throw error;
@@ -211,15 +339,61 @@ export const getSellerOrders = async (sellerId: string) => {
   }
 };
 
-// Update seller order status
+/** Maps seller `status` field → buyer `orderStatus` on users/{uid}/orders */
+export function sellerStatusToBuyerOrderStatus(
+  sellerStatus: string,
+): BuyerOrder["orderStatus"] | null {
+  const map: Record<string, BuyerOrder["orderStatus"]> = {
+    pending: "pending",
+    ready: "ready",
+    confirmed: "confirmed",
+    completed: "delivered",
+    cancelled: "cancelled",
+  };
+  return map[sellerStatus] ?? null;
+}
+
+// Update seller order status and mirror to the buyer's order document
 export const updateOrderStatus = async (
   sellerId: string,
-  orderId: string,
+  sellerOrderDocId: string,
   status: string,
 ) => {
   try {
-    const docRef = doc(db, "sellers", sellerId, "orders", orderId);
-    await updateDoc(docRef, { status });
+    const sellerRef = doc(db, "sellers", sellerId, "orders", sellerOrderDocId);
+    const snap = await getDoc(sellerRef);
+    if (!snap.exists()) {
+      throw new Error("Seller order not found");
+    }
+
+    const data = snap.data();
+    await updateDoc(sellerRef, {
+      status,
+      updatedAt: Timestamp.now(),
+    });
+
+    const buyerId = (data.buyerId ?? data.customerId) as string | undefined;
+    const buyerOrderId = data.orderId as string | undefined;
+    const buyerStatus = sellerStatusToBuyerOrderStatus(status);
+
+    if (buyerId && buyerOrderId && buyerStatus) {
+      try {
+        await updateBuyerOrderStatus(buyerId, buyerOrderId, {
+          orderStatus: buyerStatus,
+        });
+      } catch (buyerSyncError) {
+        // Seller clients often cannot write users/{buyerId}/orders — buyer syncs on load.
+        console.warn(
+          "Buyer order status not updated from seller (will sync when buyer opens orders):",
+          buyerSyncError,
+        );
+      }
+    } else {
+      console.warn(
+        "Seller order missing buyerId/orderId — buyer status cannot sync:",
+        { buyerId, buyerOrderId, sellerOrderDocId },
+      );
+    }
   } catch (error) {
     console.error("Error updating order status:", error);
     throw error;

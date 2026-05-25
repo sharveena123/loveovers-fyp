@@ -9,12 +9,19 @@ import { auth } from "@/src/services/firebase/config";
 import {
   InventoryItem,
   inventoryService,
+  isActiveListing,
 } from "@/src/services/firebase/inventoryServices";
+import {
+  computeLiveListingPrice,
+  isListingExpired,
+  resolveExpiryDate,
+} from "@/src/services/pricing/dynamicPricing";
 import {
   getUserProfile,
   SellerProfile,
   updateSellerProfile,
 } from "@/src/services/firebase/user";
+import { useSellerInventoryRefresh } from "@/src/contexts/SellerInventoryRefresh";
 import { colors, spacing } from "@/src/theme/styles";
 import { Link, router, useFocusEffect } from "expo-router";
 import {
@@ -27,8 +34,9 @@ import {
   ShoppingBag,
   Sparkles,
   TrendingUp,
+  Zap,
 } from "lucide-react-native";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -51,14 +59,30 @@ function getGreeting(): string {
   return "Good evening";
 }
 
-function getHoursUntilExpiry(item: InventoryItem): number {
-  if (!item.expiryTime) return 0;
-  return Math.max(
+function getExpiryStatus(item: InventoryItem): {
+  hoursLeft: number;
+  label: string;
+  isExpired: boolean;
+  isUrgent: boolean;
+} {
+  const expiry = resolveExpiryDate(item);
+  if (!expiry) {
+    return { hoursLeft: 0, label: "No expiry", isExpired: false, isUrgent: false };
+  }
+  if (isListingExpired(item)) {
+    return { hoursLeft: 0, label: "Expired", isExpired: true, isUrgent: true };
+  }
+  const hoursLeft = Math.max(
     0,
-    Math.floor(
-      (item.expiryTime.toDate().getTime() - Date.now()) / 1000 / 60 / 60,
-    ),
+    Math.floor((expiry.getTime() - Date.now()) / 1000 / 60 / 60),
   );
+  const label = hoursLeft < 1 ? "<1h left" : `${hoursLeft}h left`;
+  return {
+    hoursLeft,
+    label,
+    isExpired: false,
+    isUrgent: hoursLeft <= 2,
+  };
 }
 
 function StatCard({
@@ -90,18 +114,43 @@ function StatCard({
   );
 }
 
-function BagCard({ item }: { item: InventoryItem }) {
+type ListingsTab = "bag" | "item";
+
+function ListingCard({
+  item,
+  sellerId,
+  closingHour,
+  variant,
+}: {
+  item: InventoryItem;
+  sellerId: string;
+  closingHour: number;
+  variant: ListingsTab;
+}) {
   const sold = item.sold || 0;
   const remaining = item.quantity - sold;
   const progress = item.quantity > 0 ? (sold / item.quantity) * 100 : 0;
-  const hoursLeft = getHoursUntilExpiry(item);
-  const isUrgent = hoursLeft <= 2;
+  const expiryStatus = getExpiryStatus(item);
+  const { label: expiryLabel, isExpired, isUrgent } = expiryStatus;
+
+  const live = item.id
+    ? computeLiveListingPrice(item, {
+        now: new Date(),
+        closingHour,
+        listingId: item.id,
+        sellerId,
+      })
+    : null;
 
   return (
     <View style={styles.bagCard}>
       <View style={styles.bagCardTop}>
         <View style={styles.bagIconWrap}>
-          <ShoppingBag size={20} color={colors.primary} />
+          {variant === "bag" ? (
+            <ShoppingBag size={20} color={colors.primary} />
+          ) : (
+            <Package size={20} color={colors.primary} />
+          )}
         </View>
         <View style={styles.bagCardMeta}>
           <Text style={styles.bagName} numberOfLines={1}>
@@ -111,24 +160,45 @@ function BagCard({ item }: { item: InventoryItem }) {
             <View
               style={[
                 styles.statusPill,
-                isUrgent ? styles.statusPillUrgent : styles.statusPillLive,
+                isExpired || isUrgent
+                  ? styles.statusPillUrgent
+                  : styles.statusPillLive,
               ]}
             >
               <Text
                 style={[
                   styles.statusPillText,
-                  isUrgent ? styles.statusPillTextUrgent : styles.statusPillTextLive,
+                  isExpired || isUrgent
+                    ? styles.statusPillTextUrgent
+                    : styles.statusPillTextLive,
                 ]}
               >
-                {isUrgent ? `${hoursLeft}h left` : "Live"}
+                {isExpired ? "Expired" : isUrgent ? expiryLabel : "Live"}
               </Text>
             </View>
             {item.category ? (
               <Text style={styles.bagCategory}>{item.category}</Text>
             ) : null}
+            {live?.smartPricingApplied && live.smartLiveMarkdownPct > 0 ? (
+              <View style={styles.smartPill}>
+                <Zap size={10} color={colors.primary} />
+                <Text style={styles.smartPillText}>Smart −{live.smartLiveMarkdownPct}%</Text>
+              </View>
+            ) : null}
           </View>
         </View>
-        <Text style={styles.bagPrice}>RM {item.price}</Text>
+        <View style={styles.bagPriceCol}>
+          {live &&
+          live.smartPricingApplied &&
+          live.discountedPrice < (item.discountedPrice ?? item.price) ? (
+            <Text style={styles.bagPriceWas}>
+              RM {(item.discountedPrice ?? item.price).toFixed(2)}
+            </Text>
+          ) : null}
+          <Text style={styles.bagPrice}>
+            RM {(live?.discountedPrice ?? item.price).toFixed(2)}
+          </Text>
+        </View>
       </View>
 
       <View style={styles.bagStatsRow}>
@@ -141,7 +211,13 @@ function BagCard({ item }: { item: InventoryItem }) {
         </Text>
         <View style={styles.bagStatDivider} />
         <Text style={styles.bagStat}>
-          Expires in <Text style={styles.bagStatBold}>{hoursLeft}h</Text>
+          {isExpired ? (
+            <Text style={styles.bagStatBold}>Expired</Text>
+          ) : (
+            <>
+              Expires in <Text style={styles.bagStatBold}>{expiryLabel}</Text>
+            </>
+          )}
         </Text>
       </View>
 
@@ -168,6 +244,19 @@ export default function OwnerDashboard() {
     wasteChange: 0,
   });
   const [sellerProfile, setSellerProfile] = useState<SellerProfile | null>(null);
+  const [listingsTab, setListingsTab] = useState<ListingsTab>("bag");
+  const inventoryRefresh = useSellerInventoryRefresh();
+
+  const activeBags = useMemo(
+    () => inventory.filter((item) => item.type === "bag"),
+    [inventory],
+  );
+  const activeItems = useMemo(
+    () => inventory.filter((item) => item.type !== "bag"),
+    [inventory],
+  );
+  const displayedListings =
+    listingsTab === "bag" ? activeBags : activeItems;
 
   const fetchDashboardData = useCallback(async (sellerId: string, silent = false) => {
     if (!silent) setLoading(true);
@@ -182,10 +271,7 @@ export default function OwnerDashboard() {
       setStats(dashStats);
       setInventory(
         items.filter(
-          (item) =>
-            item.status === "active" ||
-            item.status === "fresh" ||
-            item.status === "expiring",
+          (item) => isActiveListing(item) && !isListingExpired(item),
         ),
       );
     } catch (error) {
@@ -238,6 +324,11 @@ export default function OwnerDashboard() {
       }
     }, [fetchDashboardData]),
   );
+
+  useEffect(() => {
+    if (!inventoryRefresh?.refreshKey || !auth.currentUser) return;
+    fetchDashboardData(auth.currentUser.uid, true);
+  }, [inventoryRefresh?.refreshKey, fetchDashboardData]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -350,7 +441,7 @@ export default function OwnerDashboard() {
             <StatCard
               icon={<ShoppingBag size={20} color="#7c6a4f" />}
               iconBg="#f5f0e8"
-              value={String(inventory.length)}
+              value={String(activeBags.length + activeItems.length)}
               label="Active listings"
               change="Live now"
               changeColor={colors.textSoft}
@@ -375,26 +466,117 @@ export default function OwnerDashboard() {
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Active mystery bags</Text>
+              <Text style={styles.sectionTitle}>Active listings</Text>
               <View style={styles.liveBadge}>
                 <View style={styles.liveDot} />
-                <Text style={styles.liveText}>{inventory.length} live</Text>
+                <Text style={styles.liveText}>
+                  {displayedListings.length} live
+                </Text>
               </View>
             </View>
 
-            {inventory.length === 0 ? (
+            <View style={styles.listingsTabRow}>
+              <TouchableOpacity
+                style={[
+                  styles.listingsTab,
+                  listingsTab === "bag" && styles.listingsTabActive,
+                ]}
+                onPress={() => setListingsTab("bag")}
+                activeOpacity={0.85}
+              >
+                <ShoppingBag
+                  size={16}
+                  color={listingsTab === "bag" ? colors.white : colors.textSoft}
+                />
+                <Text
+                  style={[
+                    styles.listingsTabText,
+                    listingsTab === "bag" && styles.listingsTabTextActive,
+                  ]}
+                >
+                  Mystery bags ({activeBags.length})
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.listingsTab,
+                  listingsTab === "item" && styles.listingsTabActive,
+                ]}
+                onPress={() => setListingsTab("item")}
+                activeOpacity={0.85}
+              >
+                <Package
+                  size={16}
+                  color={
+                    listingsTab === "item" ? colors.white : colors.textSoft
+                  }
+                />
+                <Text
+                  style={[
+                    styles.listingsTabText,
+                    listingsTab === "item" && styles.listingsTabTextActive,
+                  ]}
+                >
+                  Items ({activeItems.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {displayedListings.length === 0 ? (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIconWrap}>
-                  <Package size={32} color={colors.primary} />
+                  {listingsTab === "bag" ? (
+                    <ShoppingBag size={32} color={colors.primary} />
+                  ) : (
+                    <Package size={32} color={colors.primary} />
+                  )}
                 </View>
-                <Text style={styles.emptyTitle}>No active bags yet</Text>
+                <Text style={styles.emptyTitle}>
+                  {listingsTab === "bag"
+                    ? "No active mystery bags"
+                    : "No active items"}
+                </Text>
                 <Text style={styles.emptySubtext}>
-                  Tap the + button below to add your first mystery bag or item
+                  {listingsTab === "bag"
+                    ? "Tap + below to create a mystery bag"
+                    : "Tap + below to add a surplus item"}
                 </Text>
               </View>
             ) : (
-              inventory.map((item) => <BagCard key={item.id} item={item} />)
+              displayedListings.map((item) => (
+                <ListingCard
+                  key={item.id}
+                  item={item}
+                  sellerId={sellerProfile.uid}
+                  closingHour={sellerProfile.smartPricingClosingHour ?? 20}
+                  variant={listingsTab}
+                />
+              ))
             )}
+          </View>
+
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Smart pricing</Text>
+              <View style={styles.aiBadge}>
+                <Zap size={12} color={colors.primary} />
+                <Text style={styles.aiBadgeText}>Live</Text>
+              </View>
+            </View>
+            <View style={styles.smartPricingCard}>
+              <Sparkles size={22} color={colors.primary} />
+              <View style={styles.smartPricingText}>
+                <Text style={styles.smartPricingTitle}>
+                  Demand-based markdowns
+                </Text>
+                <Text style={styles.smartPricingBody}>
+                  Buyer prices move automatically from expiry urgency, how much is
+                  left unsold, and time before closing ({sellerProfile.smartPricingClosingHour ?? 20}:00). A/B
+                  tests two markdown curves per listing. Edit closing hour in
+                  profile settings.
+                </Text>
+              </View>
+            </View>
           </View>
 
           <View style={styles.section}>
@@ -414,6 +596,9 @@ export default function OwnerDashboard() {
                 <PredictionScreen
                   key={trainedCafeId}
                   cafeId={trainedCafeId}
+                  simulatorClosingHour={
+                    sellerProfile.smartPricingClosingHour ?? 20
+                  }
                   onModelNotFound={() => setTrainedCafeId(null)}
                   onRetrain={() => setTrainedCafeId(null)}
                 />
@@ -670,6 +855,37 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontWeight: "700",
   },
+  listingsTabRow: {
+    flexDirection: "row",
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 4,
+  },
+  listingsTab: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+  },
+  listingsTabActive: {
+    backgroundColor: colors.primary,
+  },
+  listingsTabText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textSoft,
+  },
+  listingsTabTextActive: {
+    color: colors.white,
+  },
   aiBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -752,10 +968,56 @@ const styles = StyleSheet.create({
     color: colors.textSoft,
     fontWeight: "500",
   },
+  smartPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  smartPillText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  bagPriceCol: {
+    alignItems: "flex-end",
+  },
+  bagPriceWas: {
+    fontSize: 11,
+    color: colors.textSoft,
+    textDecorationLine: "line-through",
+    marginBottom: 2,
+  },
   bagPrice: {
     fontSize: 16,
     fontWeight: "800",
     color: colors.primary,
+  },
+  smartPricingCard: {
+    flexDirection: "row",
+    gap: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: 18,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  smartPricingText: {
+    flex: 1,
+  },
+  smartPricingTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: colors.text,
+    marginBottom: 6,
+  },
+  smartPricingBody: {
+    fontSize: 13,
+    color: colors.textSoft,
+    lineHeight: 20,
   },
   bagStatsRow: {
     flexDirection: "row",

@@ -7,16 +7,41 @@ import {
 } from "@/src/services/firebase/cartServices";
 import { createConversation } from "@/src/services/firebase/messagingServices";
 import { createOrderFromCart } from "@/src/services/firebase/orders";
+import {
+  BuyerProfile,
+  getUserProfile,
+} from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
 import { CardField } from "@stripe/stripe-react-native";
-import { useFocusEffect, useRouter } from "expo-router";
-import { ArrowLeft, Lock, MapPin, Package } from "lucide-react-native";
-import { useCallback, useState } from "react";
+import { BUYER_ROUTES, goBackToReturn, pushWithReturn } from "@/src/utils/navigation";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import {
+  ArrowLeft,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Clock,
+  CreditCard,
+  Leaf,
+  Lock,
+  Mail,
+  MapPin,
+  MessageCircle,
+  Package,
+  Phone,
+  Shield,
+  ShoppingBag,
+  Sparkles,
+  User,
+} from "lucide-react-native";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -24,8 +49,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-// Uncomment useStripe hook when backend is ready
-// import { useStripe } from "@stripe/stripe-react-native";
+
+type CheckoutStep = "review" | "pickup" | "payment" | "confirmation";
 
 interface PickupForm {
   fullName: string;
@@ -35,16 +60,41 @@ interface PickupForm {
   pickupTime: string;
 }
 
+const STEPS: { key: CheckoutStep; label: string }[] = [
+  { key: "review", label: "Review" },
+  { key: "pickup", label: "Pickup" },
+  { key: "payment", label: "Payment" },
+];
+
+const PICKUP_TIMES = [
+  "10:00 AM",
+  "12:00 PM",
+  "2:00 PM",
+  "4:00 PM",
+  "6:00 PM",
+];
+
+function stepIndex(step: CheckoutStep) {
+  if (step === "review") return 0;
+  if (step === "pickup") return 1;
+  if (step === "payment") return 2;
+  return 3;
+}
+
 export default function Checkout() {
   const router = useRouter();
+  const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const { user, loading: authLoading } = useAuth();
+
+  const exitCheckout = () =>
+    goBackToReturn(router, returnTo, BUYER_ROUTES.cart);
 
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
-  const [currentStep, setCurrentStep] = useState<
-    "review" | "pickup" | "payment" | "confirmation"
-  >("review");
+  const [currentStep, setCurrentStep] =
+    useState<CheckoutStep>("review");
+  const [orderNumber, setOrderNumber] = useState("");
 
   const [pickupForm, setPickupForm] = useState<PickupForm>({
     fullName: "",
@@ -53,6 +103,14 @@ export default function Checkout() {
     pickupLocation: "",
     pickupTime: "",
   });
+
+  const pickupLocations = useMemo(
+    () =>
+      Array.from(
+        new Set(cartItems.map((i) => i.sellerName).filter(Boolean)),
+      ) as string[],
+    [cartItems],
+  );
 
   const loadCart = useCallback(async () => {
     if (!user) {
@@ -75,28 +133,62 @@ export default function Checkout() {
 
   useFocusEffect(
     useCallback(() => {
-      if (user) {
-        loadCart();
-      }
+      if (user) loadCart();
     }, [user, loadCart]),
   );
 
-  const calculateSubtotal = () => {
-    return cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  };
+  useEffect(() => {
+    if (!user) return;
 
-  const calculateDiscount = () => {
-    return cartItems.reduce((sum, item) => {
+    const prefill = async () => {
+      setPickupForm((prev) => ({
+        ...prev,
+        email: user.email || prev.email,
+        fullName: user.displayName || prev.fullName,
+      }));
+
+      try {
+        const profile = await getUserProfile(user.uid);
+        if (profile && profile.role === "buyer") {
+          const buyer = profile as BuyerProfile;
+          setPickupForm((prev) => ({
+            ...prev,
+            fullName: buyer.fullName || prev.fullName,
+            email: buyer.email || prev.email,
+            phone: buyer.phone || prev.phone,
+          }));
+        }
+      } catch {
+        /* profile optional */
+      }
+    };
+
+    prefill();
+  }, [user]);
+
+  useEffect(() => {
+    if (
+      pickupLocations.length === 1 &&
+      !pickupForm.pickupLocation
+    ) {
+      setPickupForm((prev) => ({
+        ...prev,
+        pickupLocation: pickupLocations[0],
+      }));
+    }
+  }, [pickupLocations, pickupForm.pickupLocation]);
+
+  const calculateSubtotal = () =>
+    cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+  const calculateDiscount = () =>
+    cartItems.reduce((sum, item) => {
       const original = item.originalPrice || item.price;
       return sum + (original - item.price) * item.quantity;
     }, 0);
-  };
 
   const handlePickupChange = (field: keyof PickupForm, value: string) => {
-    setPickupForm((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
+    setPickupForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const validatePickupForm = (): boolean => {
@@ -113,7 +205,7 @@ export default function Checkout() {
       return false;
     }
     if (!pickupForm.pickupLocation.trim()) {
-      Alert.alert("Required", "Please select a pickup cafe");
+      Alert.alert("Required", "Please select a pickup café");
       return false;
     }
     if (!pickupForm.pickupTime.trim()) {
@@ -138,131 +230,87 @@ export default function Checkout() {
 
     try {
       setProcessing(true);
-
       const subtotal = calculateSubtotal();
       const total = subtotal;
+      const discount = calculateDiscount();
+      const generatedOrderNo = `ORD-${Date.now().toString().slice(-8)}`;
 
-      // In a real implementation, you would:
-      // 1. Call your backend to create a PaymentIntent
-      // 2. Get the clientSecret from the response
-      // 3. Initialize payment sheet with the clientSecret
+      const orderItems = cartItems.map((item) => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity,
+        sellerId: item.sellerId,
+        sellerName: item.sellerName,
+        ...(item.imageUrl && { imageUrl: item.imageUrl }),
+        ...(item.originalPrice != null && {
+          originalPrice: item.originalPrice,
+        }),
+        ...(item.type && { type: item.type }),
+      }));
 
-      // For now, we'll show a simplified version
-      // Replace with actual backend call when ready
-
-      // Example of how to call your backend:
-      // const response = await fetch('YOUR_BACKEND_URL/create-payment-intent', {
-      //   method: 'POST',
-      //   body: JSON.stringify({ amount: total, userId: user.uid })
-      // });
-      // const { clientSecret } = await response.json();
-
-      // For testing, we'll proceed without Stripe payment sheet
-      // In production, uncomment the payment sheet code below:
-
-      /*
-      const { error: initError } = await initPaymentSheet({
-        merchantDisplayName: "LoveOvers",
-        customerId: user.uid,
-        defaultBillingDetails: {
-          name: shippingForm.fullName,
-          email: shippingForm.email,
-          phone: shippingForm.phone,
-          address: {
-            city: shippingForm.city,
-            country: "MY",
-            line1: shippingForm.street,
-            postalCode: shippingForm.postalCode,
-            state: shippingForm.state,
-          },
+      await createOrderFromCart(
+        user.uid,
+        orderItems,
+        subtotal,
+        total,
+        discount,
+        {
+          fullName: pickupForm.fullName,
+          email: pickupForm.email,
+          phone: pickupForm.phone,
+          street: pickupForm.pickupLocation,
+          city: pickupForm.pickupTime,
+          state: "Pickup",
+          postalCode: "",
         },
-        paymentIntentClientSecret: clientSecret, // From your backend
-      });
+        "pi_test",
+      );
 
-      if (initError) {
-        Alert.alert("Error", initError.message);
-        return;
+      for (const item of cartItems) {
+        await removeFromCart(user.uid, item.id);
       }
 
-      const { error: paymentError } = await presentPaymentSheet();
-
-      if (paymentError) {
-        if (paymentError.code !== "Canceled") {
-          Alert.alert("Payment Error", paymentError.message);
-        }
-        return;
-      }
-      */
-
-      // Payment successful - create order
-      try {
-        const orderItems = cartItems.map((item) => ({
-          id: item.id,
-          name: item.name,
-          price: item.price,
-          quantity: item.quantity,
-          sellerId: item.sellerId,
-          sellerName: item.sellerName,
-          ...(item.imageUrl && { imageUrl: item.imageUrl }),
-        }));
-
-        await createOrderFromCart(
-          user.uid,
-          orderItems,
-          subtotal,
-          total,
-          calculateDiscount(),
-          {
-            fullName: pickupForm.fullName,
-            email: pickupForm.email,
-            phone: pickupForm.phone,
-            street: pickupForm.pickupLocation,
-            city: pickupForm.pickupTime,
-            state: "Pickup",
-            postalCode: "",
-          },
-          "pi_test", // Replace with actual payment intent ID after backend setup
-        );
-
-        // Clear cart
-        for (const item of cartItems) {
-          await removeFromCart(user.uid, item.id);
-        }
-
-        setCurrentStep("confirmation");
-      } catch (orderError) {
-        console.error("Error creating order:", orderError);
-        Alert.alert("Error", "Failed to create order. Please contact support.");
-      }
+      setOrderNumber(generatedOrderNo);
+      setCurrentStep("confirmation");
+    } catch (orderError) {
+      console.error("Error creating order:", orderError);
+      Alert.alert("Error", "Failed to create order. Please contact support.");
     } finally {
       setProcessing(false);
     }
   };
 
-  const goToHome = () => {
-    router.push("/(buyer)/buyerhome");
-  };
+  const goToHome = () => router.push("/(buyer)/buyerhome");
 
   const goBack = () => {
-    if (currentStep === "review") {
-      router.back();
-    } else if (currentStep === "pickup") {
-      setCurrentStep("review");
-    } else if (currentStep === "payment") {
-      setCurrentStep("pickup");
-    } else if (currentStep === "confirmation") {
-      goToHome();
-    }
+    if (currentStep === "review") exitCheckout();
+    else if (currentStep === "pickup") setCurrentStep("review");
+    else if (currentStep === "payment") setCurrentStep("pickup");
+    else goToHome();
   };
 
   const subtotal = calculateSubtotal();
   const discount = calculateDiscount();
   const total = subtotal;
+  const activeStep = stepIndex(currentStep);
+
+  const stepTitle =
+    currentStep === "review"
+      ? "Order review"
+      : currentStep === "pickup"
+        ? "Pickup details"
+        : currentStep === "payment"
+          ? "Payment"
+          : "Order confirmed";
 
   if (loading || authLoading) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Preparing checkout…</Text>
+        </View>
       </SafeAreaView>
     );
   }
@@ -270,17 +318,18 @@ export default function Checkout() {
   if (!user) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Checkout</Text>
-        </View>
-        <View style={styles.emptyState}>
+        <CheckoutHeader title="Checkout" onBack={exitCheckout} />
+        <View style={styles.centered}>
+          <ShoppingBag size={40} color={colors.primary} />
           <Text style={styles.emptyTitle}>Please log in</Text>
-          <Text style={styles.emptyText}>You need to log in to checkout</Text>
+          <Text style={styles.emptySub}>
+            Sign in to complete your rescue order.
+          </Text>
           <TouchableOpacity
-            style={styles.button}
+            style={styles.primaryBtn}
             onPress={() => router.push("/(auth)/login")}
           >
-            <Text style={styles.buttonText}>Go to Login</Text>
+            <Text style={styles.primaryBtnText}>Go to login</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -290,16 +339,15 @@ export default function Checkout() {
   if (cartItems.length === 0 && currentStep !== "confirmation") {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Checkout</Text>
-        </View>
-        <View style={styles.emptyState}>
+        <CheckoutHeader title="Checkout" onBack={exitCheckout} />
+        <View style={styles.centered}>
+          <ShoppingBag size={40} color={colors.primary} />
           <Text style={styles.emptyTitle}>Your cart is empty</Text>
-          <Text style={styles.emptyText}>
-            Add items to proceed with checkout
+          <Text style={styles.emptySub}>
+            Add surplus deals before checking out.
           </Text>
-          <TouchableOpacity style={styles.button} onPress={goToHome}>
-            <Text style={styles.buttonText}>Continue Shopping</Text>
+          <TouchableOpacity style={styles.primaryBtn} onPress={goToHome}>
+            <Text style={styles.primaryBtnText}>Browse deals</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -308,46 +356,21 @@ export default function Checkout() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior="padding" style={styles.container} enabled>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={goBack} style={styles.backButton}>
-            <ArrowLeft size={24} color={colors.white} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>
-            {currentStep === "review" && "Order Review"}
-            {currentStep === "pickup" && "Pickup Details"}
-            {currentStep === "payment" && "Payment Method"}
-            {currentStep === "confirmation" && "Order Confirmed"}
-          </Text>
-          <View style={styles.backButton} />
-        </View>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <CheckoutHeader title={stepTitle} onBack={goBack} />
 
-        {/* Step Indicator */}
         {currentStep !== "confirmation" && (
-          <View style={styles.stepIndicator}>
-            <StepDot
-              active={
-                currentStep === "review" ||
-                ["pickup", "payment", "confirmation"].includes(currentStep)
-              }
-              label="Review"
-            />
-            <StepDot
-              active={["pickup", "payment", "confirmation"].includes(
-                currentStep,
-              )}
-              label="Pickup"
-            />
-            <StepDot
-              active={["payment", "confirmation"].includes(currentStep)}
-              label="Payment"
-            />
-          </View>
+          <StepProgress activeIndex={activeStep} />
         )}
 
-        <ScrollView showsVerticalScrollIndicator={false} style={styles.content}>
-          {/* Review Step */}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
           {currentStep === "review" && (
             <ReviewStep
               cartItems={cartItems}
@@ -356,64 +379,92 @@ export default function Checkout() {
               total={total}
             />
           )}
-
-          {/* Pickup Step */}
           {currentStep === "pickup" && (
-            <PickupStep form={pickupForm} onFormChange={handlePickupChange} />
+            <PickupStep
+              form={pickupForm}
+              onFormChange={handlePickupChange}
+              pickupLocations={pickupLocations}
+            />
           )}
-
-          {/* Payment Step */}
           {currentStep === "payment" && (
             <PaymentStep
               subtotal={subtotal}
               discount={discount}
               total={total}
+              pickupForm={pickupForm}
             />
           )}
-
-          {/* Confirmation Step */}
-          {currentStep === "confirmation" && <ConfirmationStep />}
-
-          <View style={{ height: 20 }} />
+          {currentStep === "confirmation" && (
+            <ConfirmationStep
+              orderNumber={orderNumber}
+              pickupForm={pickupForm}
+            />
+          )}
+          <View style={{ height: 24 }} />
         </ScrollView>
 
-        {/* Action Buttons */}
         <View style={styles.footer}>
+          {currentStep !== "confirmation" && (
+            <View style={styles.footerTotal}>
+              <Text style={styles.footerTotalLabel}>Total</Text>
+              <Text style={styles.footerTotalValue}>
+                RM {total.toFixed(2)}
+              </Text>
+            </View>
+          )}
+
           {currentStep === "review" && (
             <TouchableOpacity
-              style={styles.actionButton}
+              style={styles.footerBtn}
               onPress={() => setCurrentStep("pickup")}
+              activeOpacity={0.9}
             >
-              <Text style={styles.actionButtonText}>Continue to Pickup</Text>
+              <Text style={styles.footerBtnText}>Continue to pickup</Text>
+              <ChevronRight size={20} color={colors.white} />
             </TouchableOpacity>
           )}
 
           {currentStep === "pickup" && (
             <TouchableOpacity
-              style={styles.actionButton}
+              style={styles.footerBtn}
               onPress={handleProceedToPayment}
+              activeOpacity={0.9}
             >
-              <Text style={styles.actionButtonText}>Continue to Payment</Text>
+              <Text style={styles.footerBtnText}>Continue to payment</Text>
+              <ChevronRight size={20} color={colors.white} />
             </TouchableOpacity>
           )}
 
           {currentStep === "payment" && (
             <TouchableOpacity
-              style={[styles.actionButton, processing && styles.buttonDisabled]}
+              style={[styles.footerBtn, processing && styles.footerBtnDisabled]}
               onPress={handlePayment}
               disabled={processing}
+              activeOpacity={0.9}
             >
-              <Lock size={18} color={colors.white} style={styles.buttonIcon} />
-              <Text style={styles.actionButtonText}>
-                {processing ? "Processing..." : "Complete Payment"}
+              <Lock size={18} color={colors.white} />
+              <Text style={styles.footerBtnText}>
+                {processing ? "Processing…" : `Pay RM ${total.toFixed(2)}`}
               </Text>
             </TouchableOpacity>
           )}
 
           {currentStep === "confirmation" && (
-            <TouchableOpacity style={styles.actionButton} onPress={goToHome}>
-              <Text style={styles.actionButtonText}>Continue Shopping</Text>
-            </TouchableOpacity>
+            <View style={styles.confirmFooter}>
+              <TouchableOpacity
+                style={styles.secondaryBtn}
+                onPress={() => router.push("/(buyer)/buyerorders")}
+              >
+                <Text style={styles.secondaryBtnText}>View orders</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.footerBtn}
+                onPress={goToHome}
+                activeOpacity={0.9}
+              >
+                <Text style={styles.footerBtnText}>Back to home</Text>
+              </TouchableOpacity>
+            </View>
           )}
         </View>
       </KeyboardAvoidingView>
@@ -421,19 +472,85 @@ export default function Checkout() {
   );
 }
 
-// Step Indicator Component
-function StepDot({ active, label }: { active: boolean; label: string }) {
+function CheckoutHeader({
+  title,
+  onBack,
+}: {
+  title: string;
+  onBack: () => void;
+}) {
   return (
-    <View style={styles.stepDotContainer}>
-      <View style={[styles.stepDot, active && styles.stepDotActive]} />
-      <Text style={[styles.stepLabel, active && styles.stepLabelActive]}>
-        {label}
-      </Text>
+    <View style={styles.header}>
+      <View style={styles.headerDecor} />
+      <View style={styles.headerRow}>
+        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
+          <ArrowLeft size={22} color={colors.white} />
+        </TouchableOpacity>
+        <View style={styles.headerTextWrap}>
+          <View style={styles.greetingRow}>
+            <Sparkles size={12} color="rgba(255,255,255,0.9)" />
+            <Text style={styles.greeting}>Secure checkout</Text>
+          </View>
+          <Text style={styles.headerTitle}>{title}</Text>
+        </View>
+      </View>
     </View>
   );
 }
 
-// Review Step Component
+function StepProgress({ activeIndex }: { activeIndex: number }) {
+  return (
+    <View style={styles.stepBar}>
+      {STEPS.map((step, index) => {
+        const done = index < activeIndex;
+        const active = index === activeIndex;
+        return (
+          <View key={step.key} style={styles.stepItem}>
+            <View style={styles.stepTop}>
+              <View
+                style={[
+                  styles.stepCircle,
+                  (done || active) && styles.stepCircleActive,
+                  done && styles.stepCircleDone,
+                ]}
+              >
+                {done ? (
+                  <Check size={14} color={colors.white} strokeWidth={3} />
+                ) : (
+                  <Text
+                    style={[
+                      styles.stepNum,
+                      (done || active) && styles.stepNumActive,
+                    ]}
+                  >
+                    {index + 1}
+                  </Text>
+                )}
+              </View>
+              {index < STEPS.length - 1 && (
+                <View
+                  style={[
+                    styles.stepLine,
+                    index < activeIndex && styles.stepLineDone,
+                  ]}
+                />
+              )}
+            </View>
+            <Text
+              style={[
+                styles.stepLabel,
+                (done || active) && styles.stepLabelActive,
+              ]}
+            >
+              {step.label}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function ReviewStep({
   cartItems,
   subtotal,
@@ -448,30 +565,54 @@ function ReviewStep({
   const router = useRouter();
   const { user } = useAuth();
 
-  const handleContactSeller = async (seller: { id: string; name: string }) => {
+  const grouped = useMemo(() => {
+    const map = new Map<string, { seller: string; items: CartItem[] }>();
+    for (const item of cartItems) {
+      const key = item.sellerId || item.sellerName;
+      const existing = map.get(key);
+      if (existing) existing.items.push(item);
+      else map.set(key, { seller: item.sellerName, items: [item] });
+    }
+    return Array.from(map.values());
+  }, [cartItems]);
+
+  const handleContactSeller = async (seller: {
+    id: string;
+    name: string;
+  }) => {
     if (!user) {
-      Alert.alert("Error", "Please log in first");
+      Alert.alert("Login required", "Please log in first");
       return;
     }
 
     try {
+      let buyerName = user.displayName || "Buyer";
+      try {
+        const profile = await getUserProfile(user.uid);
+        if (profile && (profile as BuyerProfile).fullName) {
+          buyerName = (profile as BuyerProfile).fullName;
+        }
+      } catch {
+        /* fallback */
+      }
+
       const conversationId = await createConversation(
         user.uid,
-        user.displayName || "Buyer",
+        buyerName,
         seller.id,
         seller.name,
       );
-      router.push({
-        pathname: "/(buyer)/chat/[id]",
-        params: { id: conversationId },
-      });
+      pushWithReturn(
+        router,
+        `/(buyer)/chat/${conversationId}`,
+        BUYER_ROUTES.home,
+      );
     } catch (error) {
       console.error("Error creating conversation:", error);
       Alert.alert("Error", "Failed to contact seller");
     }
   };
 
-  // Get unique sellers
   const uniqueSellers = Array.from(
     new Map(
       cartItems.map((item) => [
@@ -483,212 +624,391 @@ function ReviewStep({
 
   return (
     <View style={styles.stepContent}>
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeader}>
-          <Package size={20} color={colors.primary} />
-          <Text style={styles.sectionTitle}>Order Items</Text>
-        </View>
+      <Text style={styles.blockTitle}>
+        {cartItems.reduce((s, i) => s + i.quantity, 0)} items ·{" "}
+        {grouped.length} seller{grouped.length !== 1 ? "s" : ""}
+      </Text>
 
-        {cartItems.map((item) => (
-          <View key={item.id} style={styles.orderItem}>
-            <View style={styles.orderItemInfo}>
-              <Text style={styles.orderItemName} numberOfLines={2}>
-                {item.name}
-              </Text>
-              <Text style={styles.orderItemSeller}>{item.sellerName}</Text>
-              <Text style={styles.orderItemQuantity}>Qty: {item.quantity}</Text>
-            </View>
-            <View style={styles.orderItemPrice}>
-              <Text style={styles.orderItemPriceText}>
+      {grouped.map((group) => (
+        <View key={group.seller} style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Package size={18} color={colors.primary} />
+            <Text style={styles.cardTitle}>{group.seller}</Text>
+          </View>
+          {group.items.map((item, idx) => (
+            <View
+              key={item.id}
+              style={[
+                styles.orderRow,
+                idx < group.items.length - 1 && styles.orderRowBorder,
+              ]}
+            >
+              <View style={styles.orderThumb}>
+                {item.imageUrl ? (
+                  <Image
+                    source={{ uri: item.imageUrl }}
+                    style={styles.orderThumbImg}
+                  />
+                ) : (
+                  <ShoppingBag size={22} color={colors.primary} />
+                )}
+                {item.type === "bag" && (
+                  <View style={styles.mysteryDot}>
+                    <Text style={styles.mysteryDotText}>?</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.orderInfo}>
+                <Text style={styles.orderName} numberOfLines={2}>
+                  {item.name}
+                </Text>
+                <Text style={styles.orderMeta}>Qty {item.quantity}</Text>
+              </View>
+              <Text style={styles.orderPrice}>
                 RM {(item.price * item.quantity).toFixed(2)}
               </Text>
             </View>
-          </View>
-        ))}
+          ))}
+        </View>
+      ))}
 
-        {uniqueSellers.length > 0 && (
-          <View style={styles.contactSellerContainer}>
-            <Text style={styles.contactSellerLabel}>Have questions?</Text>
+      {uniqueSellers.length > 0 && (
+        <View style={styles.contactCard}>
+          <MessageCircle size={18} color={colors.primary} />
+          <View style={styles.contactCardBody}>
+            <Text style={styles.contactTitle}>Questions before pickup?</Text>
+            <Text style={styles.contactSub}>
+              Message the seller directly about your order.
+            </Text>
             {uniqueSellers.map((seller) => (
               <TouchableOpacity
                 key={seller.id}
-                style={styles.contactSellerButton}
+                style={styles.contactChip}
                 onPress={() => handleContactSeller(seller)}
               >
-                <Text style={styles.contactSellerButtonText}>
-                  Contact {seller.name}
-                </Text>
+                <Text style={styles.contactChipText}>Chat · {seller.name}</Text>
+                <ChevronRight size={16} color={colors.primary} />
               </TouchableOpacity>
             ))}
           </View>
-        )}
-      </View>
-
-      <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Order Summary</Text>
-
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Subtotal</Text>
-          <Text style={styles.summaryValue}>RM {subtotal.toFixed(2)}</Text>
         </View>
+      )}
 
-        {discount > 0 && (
-          <View style={[styles.summaryRow, styles.discountRow]}>
-            <Text style={styles.discountLabel}>Discount</Text>
-            <Text style={styles.discountValue}>-RM {discount.toFixed(2)}</Text>
-          </View>
-        )}
-
-        <View style={styles.divider} />
-
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Total</Text>
-          <Text style={styles.totalPrice}>RM {total.toFixed(2)}</Text>
-        </View>
-
-        {discount > 0 && (
-          <Text style={styles.savingsText}>
-            💚 You&apos;re saving RM {discount.toFixed(2)}!
-          </Text>
-        )}
-      </View>
+      <SummaryCard
+        subtotal={subtotal}
+        discount={discount}
+        total={total}
+        title="Order summary"
+      />
     </View>
   );
 }
 
-// Pickup Step Component
 function PickupStep({
   form,
   onFormChange,
+  pickupLocations,
 }: {
   form: PickupForm;
   onFormChange: (field: keyof PickupForm, value: string) => void;
+  pickupLocations: string[];
 }) {
-  const pickupLocations = [
-    "Loma Haus Bakery - BGC",
-    "Loma Haus Bakery - Makati",
-    "Loma Haus Bakery - Ortigas",
-  ];
-  const pickupTimes = ["10:00 AM", "12:00 PM", "2:00 PM", "4:00 PM", "6:00 PM"];
-
   return (
     <View style={styles.stepContent}>
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeader}>
-          <MapPin size={20} color={colors.primary} />
-          <Text style={styles.sectionTitle}>Pickup Details</Text>
+      <View style={styles.infoBanner}>
+        <MapPin size={18} color={colors.primary} />
+        <Text style={styles.infoBannerText}>
+          Pick up your rescued food in person at the selected café. No delivery
+          for surplus orders.
+        </Text>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <User size={18} color={colors.primary} />
+          <Text style={styles.cardTitle}>Your details</Text>
         </View>
 
-        <ShippingInput
-          label="Full Name"
-          placeholder="John Doe"
+        <FormField
+          label="Full name"
+          icon={<User size={16} color={colors.textSoft} />}
+          placeholder="Your full name"
           value={form.fullName}
-          onChangeText={(text) => onFormChange("fullName", text)}
+          onChangeText={(t) => onFormChange("fullName", t)}
         />
-
-        <ShippingInput
+        <FormField
           label="Email"
-          placeholder="john@example.com"
+          icon={<Mail size={16} color={colors.textSoft} />}
+          placeholder="you@email.com"
           value={form.email}
-          onChangeText={(text) => onFormChange("email", text)}
+          onChangeText={(t) => onFormChange("email", t)}
           keyboardType="email-address"
+          autoCapitalize="none"
         />
-
-        <ShippingInput
-          label="Phone Number"
-          placeholder="+60 12345 6789"
+        <FormField
+          label="Phone"
+          icon={<Phone size={16} color={colors.textSoft} />}
+          placeholder="+60 12 345 6789"
           value={form.phone}
-          onChangeText={(text) => onFormChange("phone", text)}
+          onChangeText={(t) => onFormChange("phone", t)}
           keyboardType="phone-pad"
         />
+      </View>
 
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Pickup Location</Text>
-          <View style={styles.input}>
-            <TextInput
-              style={styles.inputField}
-              placeholder="Select a cafe location"
-              value={form.pickupLocation}
-              onChangeText={(text) => onFormChange("pickupLocation", text)}
-              placeholderTextColor={colors.textSoft}
-            />
-          </View>
-          <View style={styles.optionsContainer}>
-            {pickupLocations.map((location) => (
-              <TouchableOpacity
-                key={location}
-                style={[
-                  styles.optionButton,
-                  form.pickupLocation === location && styles.optionButtonActive,
-                ]}
-                onPress={() => onFormChange("pickupLocation", location)}
-              >
-                <Text
-                  style={[
-                    styles.optionText,
-                    form.pickupLocation === location && styles.optionTextActive,
-                  ]}
-                >
-                  {location}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <MapPin size={18} color={colors.primary} />
+          <Text style={styles.cardTitle}>Pickup café</Text>
         </View>
 
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Pickup Time</Text>
-          <View style={styles.optionsContainer}>
-            {pickupTimes.map((time) => (
+        {pickupLocations.length === 0 ? (
+          <FormField
+            label="Location"
+            icon={<MapPin size={16} color={colors.textSoft} />}
+            placeholder="Enter café name or address"
+            value={form.pickupLocation}
+            onChangeText={(t) => onFormChange("pickupLocation", t)}
+          />
+        ) : (
+          <View style={styles.chipGrid}>
+            {pickupLocations.map((location) => {
+              const selected = form.pickupLocation === location;
+              return (
+                <TouchableOpacity
+                  key={location}
+                  style={[styles.chip, selected && styles.chipActive]}
+                  onPress={() => onFormChange("pickupLocation", location)}
+                >
+                  <MapPin
+                    size={14}
+                    color={selected ? colors.white : colors.primary}
+                  />
+                  <Text
+                    style={[styles.chipText, selected && styles.chipTextActive]}
+                    numberOfLines={2}
+                  >
+                    {location}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <Clock size={18} color={colors.primary} />
+          <Text style={styles.cardTitle}>Pickup time</Text>
+        </View>
+        <View style={styles.timeGrid}>
+          {PICKUP_TIMES.map((time) => {
+            const selected = form.pickupTime === time;
+            return (
               <TouchableOpacity
                 key={time}
-                style={[
-                  styles.timeButton,
-                  form.pickupTime === time && styles.timeButtonActive,
-                ]}
+                style={[styles.timeChip, selected && styles.timeChipActive]}
                 onPress={() => onFormChange("pickupTime", time)}
               >
                 <Text
                   style={[
-                    styles.timeButtonText,
-                    form.pickupTime === time && styles.timeButtonTextActive,
+                    styles.timeChipText,
+                    selected && styles.timeChipTextActive,
                   ]}
                 >
                   {time}
                 </Text>
               </TouchableOpacity>
-            ))}
-          </View>
+            );
+          })}
         </View>
       </View>
     </View>
   );
 }
 
-// Shipping Input Component
-function ShippingInput({
+function PaymentStep({
+  subtotal,
+  discount,
+  total,
+  pickupForm,
+}: {
+  subtotal: number;
+  discount: number;
+  total: number;
+  pickupForm: PickupForm;
+}) {
+  return (
+    <View style={styles.stepContent}>
+      <View style={styles.pickupRecap}>
+        <MapPin size={16} color={colors.primary} />
+        <View style={styles.pickupRecapText}>
+          <Text style={styles.pickupRecapTitle}>Pickup</Text>
+          <Text style={styles.pickupRecapValue} numberOfLines={1}>
+            {pickupForm.pickupLocation || "—"} · {pickupForm.pickupTime || "—"}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <CreditCard size={18} color={colors.primary} />
+          <Text style={styles.cardTitle}>Card details</Text>
+        </View>
+        <View style={styles.secureRow}>
+          <Shield size={14} color={colors.success} />
+          <Text style={styles.secureText}>
+            Secured by Stripe · encrypted end-to-end
+          </Text>
+        </View>
+        <CardField
+          postalCodeEnabled={false}
+          style={styles.cardField}
+          cardStyle={{
+            backgroundColor: colors.background,
+            textColor: colors.text,
+            borderColor: colors.border,
+            borderWidth: 1,
+            borderRadius: 12,
+          }}
+        />
+      </View>
+
+      <SummaryCard
+        subtotal={subtotal}
+        discount={discount}
+        total={total}
+        title="Payment summary"
+      />
+    </View>
+  );
+}
+
+function ConfirmationStep({
+  orderNumber,
+  pickupForm,
+}: {
+  orderNumber: string;
+  pickupForm: PickupForm;
+}) {
+  return (
+    <View style={styles.stepContent}>
+      <View style={styles.successCard}>
+        <View style={styles.successIcon}>
+          <CheckCircle2 size={48} color={colors.success} />
+        </View>
+        <Text style={styles.successTitle}>Order confirmed!</Text>
+        <Text style={styles.successSub}>
+          Thank you for rescuing surplus food. Show your order at pickup.
+        </Text>
+
+        <View style={styles.orderNoBox}>
+          <Text style={styles.orderNoLabel}>Order number</Text>
+          <Text style={styles.orderNoValue}>
+            #{orderNumber || `ORD-${Date.now().toString().slice(-8)}`}
+          </Text>
+        </View>
+
+        <View style={styles.confirmDetails}>
+          <View style={styles.confirmRow}>
+            <MapPin size={16} color={colors.primary} />
+            <View>
+              <Text style={styles.confirmLabel}>Pickup at</Text>
+              <Text style={styles.confirmValue}>
+                {pickupForm.pickupLocation}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.confirmDivider} />
+          <View style={styles.confirmRow}>
+            <Clock size={16} color={colors.primary} />
+            <View>
+              <Text style={styles.confirmLabel}>Time</Text>
+              <Text style={styles.confirmValue}>{pickupForm.pickupTime}</Text>
+            </View>
+          </View>
+        </View>
+
+        <Text style={styles.confirmHint}>
+          A confirmation has been sent to {pickupForm.email || "your email"}.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function SummaryCard({
+  subtotal,
+  discount,
+  total,
+  title,
+}: {
+  subtotal: number;
+  discount: number;
+  total: number;
+  title: string;
+}) {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cardTitle}>{title}</Text>
+      <View style={styles.summaryRow}>
+        <Text style={styles.summaryLabel}>Subtotal</Text>
+        <Text style={styles.summaryValue}>RM {subtotal.toFixed(2)}</Text>
+      </View>
+      {discount > 0 && (
+        <View style={styles.summaryRow}>
+          <Text style={[styles.summaryLabel, { color: colors.success }]}>
+            You save
+          </Text>
+          <Text style={styles.discountValue}>-RM {discount.toFixed(2)}</Text>
+        </View>
+      )}
+      <View style={styles.summaryDivider} />
+      <View style={styles.summaryRow}>
+        <Text style={styles.totalLabel}>Total</Text>
+        <Text style={styles.totalValue}>RM {total.toFixed(2)}</Text>
+      </View>
+      {discount > 0 && (
+        <View style={styles.savingsBanner}>
+          <Leaf size={16} color={colors.success} />
+          <Text style={styles.savingsText}>
+            Saving RM {discount.toFixed(2)} on this order
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function FormField({
   label,
+  icon,
   placeholder,
   value,
   onChangeText,
   keyboardType = "default",
+  autoCapitalize,
 }: {
   label: string;
+  icon: ReactNode;
   placeholder: string;
   value: string;
   onChangeText: (text: string) => void;
-  keyboardType?: string;
+  keyboardType?: "default" | "email-address" | "phone-pad";
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
 }) {
   return (
-    <View style={styles.inputGroup}>
-      <Text style={styles.inputLabel}>{label}</Text>
-      <View style={styles.input}>
+    <View style={styles.fieldGroup}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={styles.fieldInput}>
+        {icon}
         <TextInput
-          style={styles.inputField}
+          style={styles.fieldText}
           placeholder={placeholder}
           value={value}
           onChangeText={onChangeText}
-          keyboardType={keyboardType as any}
+          keyboardType={keyboardType}
+          autoCapitalize={autoCapitalize}
           placeholderTextColor={colors.textSoft}
         />
       </View>
@@ -696,479 +1016,513 @@ function ShippingInput({
   );
 }
 
-// Payment Step Component
-function PaymentStep({
-  subtotal,
-  discount,
-  total,
-}: {
-  subtotal: number;
-  discount: number;
-  total: number;
-}) {
-  return (
-    <View style={styles.stepContent}>
-      <View style={styles.sectionCard}>
-        <View style={styles.sectionHeader}>
-          <Lock size={20} color={colors.primary} />
-          <Text style={styles.sectionTitle}>Payment Method</Text>
-        </View>
-
-        <Text style={styles.paymentDescription}>
-          Enter your card details below. Your payment is secure and encrypted.
-        </Text>
-
-        <CardField postalCodeEnabled={false} style={styles.cardField} />
-      </View>
-
-      <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Payment Summary</Text>
-
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Subtotal</Text>
-          <Text style={styles.summaryValue}>RM {subtotal.toFixed(2)}</Text>
-        </View>
-
-        {discount > 0 && (
-          <View style={[styles.summaryRow, styles.discountRow]}>
-            <Text style={styles.discountLabel}>Discount</Text>
-            <Text style={styles.discountValue}>-RM {discount.toFixed(2)}</Text>
-          </View>
-        )}
-
-        <View style={styles.divider} />
-
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Total Amount</Text>
-          <Text style={styles.totalPrice}>RM {total.toFixed(2)}</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
-// Confirmation Step Component
-function ConfirmationStep() {
-  return (
-    <View style={styles.stepContent}>
-      <View style={styles.confirmationCard}>
-        <View style={styles.confirmationCheckmark}>
-          <Text style={styles.confirmationCheckmarkText}>✓</Text>
-        </View>
-        <Text style={styles.confirmationTitle}>Order Confirmed!</Text>
-        <Text style={styles.confirmationText}>
-          Thank you for your purchase. Your order has been successfully placed.
-        </Text>
-        <Text style={styles.confirmationText}>
-          You will receive an email confirmation shortly with your order details
-          and tracking information.
-        </Text>
-        <View style={styles.confirmationInfo}>
-          <Text style={styles.confirmationLabel}>Order Number:</Text>
-          <Text style={styles.confirmationValue}>#ORD-{Date.now()}</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: colors.background },
+  flex: { flex: 1 },
+  centered: {
     flex: 1,
-    backgroundColor: colors.background,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xl,
+    gap: spacing.md,
   },
+  loadingText: { fontSize: 14, color: colors.textSoft },
   header: {
     backgroundColor: colors.primary,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    overflow: "hidden",
+  },
+  headerDecor: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    top: -40,
+    right: -20,
+  },
+  headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    gap: spacing.md,
+    zIndex: 1,
   },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: colors.white,
-    flex: 1,
-    textAlign: "center",
-  },
-  backButton: {
+  headerTextWrap: { flex: 1 },
+  backBtn: {
     width: 40,
     height: 40,
-    borderRadius: 8,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
     justifyContent: "center",
-    alignItems: "center",
   },
-  stepIndicator: {
+  greetingRow: {
     flexDirection: "row",
-    justifyContent: "space-around",
     alignItems: "center",
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.lg,
+    gap: 6,
+    marginBottom: 2,
+  },
+  greeting: { fontSize: 12, color: "rgba(255,255,255,0.9)" },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  stepBar: {
+    flexDirection: "row",
     backgroundColor: colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  stepDotContainer: {
-    alignItems: "center",
-    gap: spacing.sm,
-  },
-  stepDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: colors.border,
-  },
-  stepDotActive: {
-    backgroundColor: colors.primary,
-  },
-  stepLabel: {
-    fontSize: 12,
-    color: colors.textSoft,
-  },
-  stepLabelActive: {
-    color: colors.primary,
-    fontWeight: "600",
-  },
-  content: {
-    flex: 1,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-  },
-  stepContent: {
-    gap: spacing.lg,
-  },
-  sectionCard: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.md,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.text,
-  },
-  orderItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
     paddingVertical: spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  orderItemInfo: {
-    flex: 1,
-    gap: 4,
+  stepItem: { flex: 1, alignItems: "center" },
+  stepTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+    justifyContent: "center",
+    marginBottom: 6,
   },
-  orderItemName: {
-    fontSize: 14,
-    fontWeight: "600",
+  stepCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1,
+  },
+  stepCircleActive: { backgroundColor: colors.primary },
+  stepCircleDone: { backgroundColor: colors.success },
+  stepNum: { fontSize: 12, fontWeight: "800", color: colors.textSoft },
+  stepNumActive: { color: colors.white },
+  stepLine: {
+    position: "absolute",
+    left: "55%",
+    right: "-45%",
+    height: 2,
+    backgroundColor: colors.border,
+    top: 13,
+  },
+  stepLineDone: { backgroundColor: colors.success },
+  stepLabel: { fontSize: 11, color: colors.textSoft, fontWeight: "600" },
+  stepLabelActive: { color: colors.primary, fontWeight: "800" },
+  scrollContent: {
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
+  stepContent: { gap: spacing.md },
+  blockTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textSoft,
+    marginBottom: 4,
+  },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: 18,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "800",
     color: colors.text,
   },
-  orderItemSeller: {
-    fontSize: 12,
-    color: colors.textSoft,
-  },
-  orderItemQuantity: {
-    fontSize: 12,
-    color: colors.textSoft,
-  },
-  orderItemPrice: {
-    marginLeft: spacing.md,
-  },
-  orderItemPriceText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.primary,
-  },
-  summaryRow: {
+  orderRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
+    gap: spacing.md,
     paddingVertical: spacing.sm,
   },
-  summaryLabel: {
-    fontSize: 14,
-    color: colors.textSoft,
+  orderRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
-  summaryValue: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.text,
-  },
-  discountRow: {
-    paddingVertical: spacing.md,
-  },
-  discountLabel: {
-    fontSize: 14,
-    color: colors.primary,
-    fontWeight: "600",
-  },
-  discountValue: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.primary,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginVertical: spacing.md,
-  },
-  totalRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
+  orderThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
     alignItems: "center",
-    paddingVertical: spacing.md,
+    justifyContent: "center",
+    overflow: "hidden",
+    position: "relative",
   },
-  totalLabel: {
-    fontSize: 16,
+  orderThumbImg: { width: "100%", height: "100%" },
+  mysteryDot: {
+    position: "absolute",
+    bottom: 2,
+    right: 2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mysteryDotText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  orderInfo: { flex: 1 },
+  orderName: {
+    fontSize: 14,
     fontWeight: "700",
     color: colors.text,
+    marginBottom: 2,
   },
-  totalPrice: {
-    fontSize: 18,
+  orderMeta: { fontSize: 12, color: colors.textSoft },
+  orderPrice: {
+    fontSize: 14,
     fontWeight: "800",
     color: colors.primary,
   },
-  savingsText: {
-    fontSize: 13,
-    color: colors.primary,
-    marginTop: spacing.md,
-    fontWeight: "600",
-  },
-  inputGroup: {
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: colors.text,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: spacing.md,
-    backgroundColor: colors.white,
-  },
-  inputField: {
-    height: 44,
-    fontSize: 14,
-    color: colors.text,
-  },
-  rowInputs: {
+  contactCard: {
     flexDirection: "row",
     gap: spacing.md,
-  },
-  halfInput: {
-    flex: 1,
-  },
-  paymentDescription: {
-    fontSize: 13,
-    color: colors.textSoft,
-    lineHeight: 18,
-  },
-  cardField: {
-    height: 50,
-    marginVertical: spacing.md,
-  },
-  confirmationCard: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-    gap: spacing.lg,
-  },
-  confirmationCheckmark: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
     backgroundColor: colors.primarySoft,
-    justifyContent: "center",
-    alignItems: "center",
+    borderRadius: 16,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(106,60,0,0.15)",
   },
-  confirmationCheckmarkText: {
-    fontSize: 48,
+  contactCardBody: { flex: 1, gap: spacing.sm },
+  contactTitle: {
+    fontSize: 14,
     fontWeight: "800",
+    color: colors.text,
+  },
+  contactSub: { fontSize: 12, color: colors.textSoft, lineHeight: 18 },
+  contactChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.white,
+    borderRadius: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  contactChipText: {
+    fontSize: 13,
+    fontWeight: "700",
     color: colors.primary,
   },
-  confirmationTitle: {
-    fontSize: 22,
-    fontWeight: "700",
-    color: colors.text,
-    textAlign: "center",
+  infoBanner: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    backgroundColor: colors.primarySoft,
+    borderRadius: 14,
+    padding: spacing.md,
+    alignItems: "flex-start",
   },
-  confirmationText: {
-    fontSize: 14,
-    color: colors.textSoft,
-    textAlign: "center",
+  infoBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.text,
     lineHeight: 20,
   },
-  confirmationInfo: {
-    backgroundColor: colors.primarySoft,
-    borderRadius: 8,
-    padding: spacing.md,
-    width: "100%",
-    gap: spacing.sm,
-  },
-  confirmationLabel: {
+  fieldGroup: { marginBottom: spacing.sm },
+  fieldLabel: {
     fontSize: 12,
+    fontWeight: "700",
     color: colors.textSoft,
+    marginBottom: 6,
   },
-  confirmationValue: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.primary,
-  },
-  footer: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
-    paddingBottom: spacing.xl,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    backgroundColor: colors.white,
-  },
-  actionButton: {
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    justifyContent: "center",
-    alignItems: "center",
+  fieldInput: {
     flexDirection: "row",
-    gap: spacing.md,
-  },
-  actionButtonText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.white,
-    textAlign: "center",
-  },
-  buttonIcon: {
-    marginRight: spacing.sm,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: spacing.lg,
-    gap: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
+    height: 48,
   },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: "700",
+  fieldText: {
+    flex: 1,
+    fontSize: 14,
     color: colors.text,
   },
-  emptyText: {
-    fontSize: 14,
-    color: colors.textSoft,
-    textAlign: "center",
-  },
-  button: {
-    backgroundColor: colors.primary,
+  chipGrid: { gap: spacing.sm },
+  chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    padding: spacing.md,
     borderRadius: 12,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    marginTop: spacing.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
   },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.white,
-    textAlign: "center",
+  chipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
-  optionsContainer: {
+  chipText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  chipTextActive: { color: colors.white, fontWeight: "800" },
+  timeGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.sm,
   },
-  optionButton: {
-    flex: 1,
-    minWidth: "45%",
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderRadius: 8,
+  timeChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.white,
-  },
-  optionButtonActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primarySoft,
-  },
-  optionText: {
-    fontSize: 12,
-    color: colors.text,
-    fontWeight: "500",
-    textAlign: "center",
-  },
-  optionTextActive: {
-    color: colors.primary,
-    fontWeight: "700",
-  },
-  timeButton: {
-    flex: 1,
+    backgroundColor: colors.background,
     minWidth: "30%",
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.sm,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.white,
+    alignItems: "center",
   },
-  timeButtonActive: {
-    borderColor: colors.primary,
+  timeChipActive: {
     backgroundColor: colors.primary,
-  },
-  timeButtonText: {
-    fontSize: 12,
-    color: colors.text,
-    fontWeight: "500",
-    textAlign: "center",
-  },
-  timeButtonTextActive: {
-    color: colors.white,
-    fontWeight: "700",
-  },
-  contactSellerContainer: {
-    marginTop: spacing.md,
-    paddingTop: spacing.md,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    gap: spacing.sm,
-  },
-  contactSellerLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.textSoft,
-    marginBottom: spacing.sm,
-  },
-  contactSellerButton: {
-    backgroundColor: colors.primarySoft,
-    borderRadius: 8,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderWidth: 1,
     borderColor: colors.primary,
   },
-  contactSellerButtonText: {
+  timeChipText: {
     fontSize: 13,
     fontWeight: "600",
+    color: colors.text,
+  },
+  timeChipTextActive: { color: colors.white, fontWeight: "800" },
+  pickupRecap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  pickupRecapText: { flex: 1 },
+  pickupRecapTitle: { fontSize: 11, color: colors.textSoft },
+  pickupRecapValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: 2,
+  },
+  secureRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
+  secureText: { fontSize: 12, color: colors.success, fontWeight: "600" },
+  cardField: {
+    height: 52,
+    marginVertical: spacing.sm,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 4,
+  },
+  summaryLabel: { fontSize: 14, color: colors.textSoft },
+  summaryValue: { fontSize: 14, fontWeight: "700", color: colors.text },
+  discountValue: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: colors.success,
+  },
+  summaryDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.sm,
+  },
+  totalLabel: { fontSize: 16, fontWeight: "800", color: colors.text },
+  totalValue: {
+    fontSize: 22,
+    fontWeight: "800",
     color: colors.primary,
+  },
+  savingsBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.successSoft,
+    padding: spacing.sm,
+    borderRadius: 10,
+    marginTop: spacing.sm,
+  },
+  savingsText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.success,
+    flex: 1,
+  },
+  successCard: {
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    padding: spacing.xl,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.md,
+  },
+  successIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: colors.successSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.sm,
+  },
+  successTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: colors.text,
     textAlign: "center",
+  },
+  successSub: {
+    fontSize: 14,
+    color: colors.textSoft,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  orderNoBox: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: 14,
+    padding: spacing.md,
+    width: "100%",
+    alignItems: "center",
+    marginTop: spacing.sm,
+  },
+  orderNoLabel: { fontSize: 12, color: colors.textSoft },
+  orderNoValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.primary,
+    marginTop: 4,
+  },
+  confirmDetails: {
+    width: "100%",
+    backgroundColor: colors.background,
+    borderRadius: 14,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+  },
+  confirmRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.md,
+  },
+  confirmDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.md,
+  },
+  confirmLabel: { fontSize: 11, color: colors.textSoft },
+  confirmValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: 2,
+  },
+  confirmHint: {
+    fontSize: 12,
+    color: colors.textSoft,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+  footer: {
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  footerTotal: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.sm,
+  },
+  footerTotalLabel: { fontSize: 13, color: colors.textSoft },
+  footerTotalValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  footerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: colors.primary,
+    borderRadius: 14,
+    paddingVertical: 16,
+  },
+  footerBtnDisabled: { opacity: 0.6 },
+  footerBtnText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  confirmFooter: { gap: spacing.sm },
+  secondaryBtn: {
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+  },
+  secondaryBtnText: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  emptySub: {
+    fontSize: 14,
+    color: colors.textSoft,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  primaryBtn: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: 14,
+    marginTop: spacing.sm,
+  },
+  primaryBtnText: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.white,
   },
 });

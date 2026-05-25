@@ -2,11 +2,12 @@ import InputField from '@/src/components/InputField'
 import PrimaryButton from '@/src/components/PrimaryButton'
 import { Text } from '@/src/components/StyledText'
 import { auth } from '@/src/services/firebase/config'
-import { getUserProfile } from '@/src/services/firebase/user'
-import { colors } from '@/src/theme/styles'
+import { getSellerPostAuthRoute } from '@/src/services/firebase/sellerRegistration'
+import { getUserProfile, SellerProfile } from '@/src/services/firebase/user'
+import { colors, spacing } from '@/src/theme/styles'
 import { router } from 'expo-router'
 import { signInWithEmailAndPassword } from 'firebase/auth'
-import { Eye, Lock, Mail } from 'lucide-react-native'
+import { ChevronLeft, Eye, Lock, Mail } from 'lucide-react-native'
 import { useState } from 'react'
 import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native'
 
@@ -40,9 +41,8 @@ export default function LoginScreen() {
         throw new Error('User profile not found')
       }
 
-      // Route based on role
       if (profile.role === 'seller') {
-        router.replace('/(seller)/dashboard')
+        router.replace(getSellerPostAuthRoute(profile as SellerProfile))
       } else {
         router.replace('/(buyer)/buyerhome')
       }
@@ -73,24 +73,17 @@ export default function LoginScreen() {
     router.push('/(auth)/register')
   }
 
-  const handleGoogleLogin = () => {
-    Alert.alert('Google Login', 'Coming soon!')
-  }
-
-  const handleFacebookLogin = () => {
-    Alert.alert('Facebook Login', 'Coming soon!')
-  }
-
   return (
     <View style={styles.container}>
-      {/* Logo */}
-      {/* <View style={styles.logoContainer}>
-        <View style={styles.logoCircle}>
-          <Text style={styles.logoIcon}>🛍️</Text>
-        </View>
-      </View> */}
+      <TouchableOpacity
+        style={styles.backLink}
+        onPress={() => router.replace('/')}
+        activeOpacity={0.8}
+      >
+        <ChevronLeft size={20} color={colors.primary} />
+        <Text style={styles.backLinkText}>Back</Text>
+      </TouchableOpacity>
 
-      {/* Header */}
       <Text style={styles.title}>Welcome Back!</Text>
       <Text style={styles.subtitle}>Save food, save money, save the planet</Text>
 
@@ -141,24 +134,6 @@ export default function LoginScreen() {
           disabled={loading}
           style={styles.signInButton}
         />
-
-        {/* Divider */}
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>OR</Text>
-          <View style={styles.dividerLine} />
-        </View>
-
-        {/* Social Login Buttons */}
-        <TouchableOpacity style={styles.socialButton} onPress={handleGoogleLogin}>
-          <Text style={styles.socialButtonText}>G</Text>
-          <Text style={styles.socialButtonLabel}>Continue with Google</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.socialButton} onPress={handleFacebookLogin}>
-          <Text style={styles.socialButtonText}>f</Text>
-          <Text style={styles.socialButtonLabel}>Continue with Facebook</Text>
-        </TouchableOpacity>
       </View>
 
       {/* Footer */}
@@ -201,6 +176,18 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: 8,
     textAlign: 'center',
+  },
+  backLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginBottom: spacing.md,
+    gap: 4,
+  },
+  backLinkText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.primary,
   },
   subtitle: {
     fontSize: 16,
@@ -263,43 +250,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   signInButton: {
-    marginBottom: 24,
-    backgroundColor: colors.primary, 
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  dividerText: {
-    marginHorizontal: 16,
-    color: colors.textSoft,
-    fontSize: 14,
-  },
-  socialButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingVertical: 12,
-    marginBottom: 12,
-  },
-  socialButtonText: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginRight: 12,
-  },
-  socialButtonLabel: {
-    fontSize: 14,
-    color: colors.text,
-    fontWeight: '500',
+    backgroundColor: colors.primary,
   },
   footer: {
     flexDirection: 'row',

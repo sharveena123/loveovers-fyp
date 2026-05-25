@@ -7,6 +7,11 @@ import {
   getDocs,
   updateDoc,
 } from "firebase/firestore";
+import { updateOrderStatus as syncSellerAndBuyerOrderStatus } from "./orders";
+import {
+  isListingExpired,
+  resolveExpiryDate,
+} from "@/src/services/pricing/dynamicPricing";
 import { db } from "./config";
 
 export type ItemType = "bag" | "item";
@@ -37,6 +42,10 @@ export interface InventoryItem {
   price: number;
   originalPrice?: number;
   discountedPrice?: number;
+  /** When true (default for bags), live price uses expiry / demand / closing-time engine. */
+  smartPricingEnabled?: boolean;
+  /** A/B curve: stable vs slightly more aggressive markdown (assigned from listing id). */
+  smartPricingStrategy?: "stable" | "aggressive";
   expiryDate: string;
   expiryTime?: Timestamp;
   status: ItemStatus;
@@ -94,6 +103,7 @@ class InventoryService {
       price: data.discountedPrice,
       originalPrice: data.originalPrice,
       discountedPrice: data.discountedPrice,
+      smartPricingEnabled: true,
       expiryDate: data.expiryDate,
       expiryTime: Timestamp.fromDate(expiryDateTime),
       status: "fresh" as ItemStatus,
@@ -117,14 +127,18 @@ class InventoryService {
       category: ItemCategory;
       quantity: number;
       price: number;
+      originalPrice?: number;
+      discountedPrice?: number;
+      smartPricingEnabled?: boolean;
       expiryDate: string;
-      expiryTime: string;
+      expiryAt: Date;
       imageUrl?: string;
     }
   ): Promise<void> {
     const inventoryRef = collection(db, "sellers", sellerId, "inventory");
 
-    const expiryDateTime = new Date(`${data.expiryDate}T${data.expiryTime}`);
+    const listFloor = data.discountedPrice ?? data.price;
+    const retail = data.originalPrice ?? data.price;
 
     const itemData: any = {
       sellerId,
@@ -133,9 +147,12 @@ class InventoryService {
       category: data.category,
       quantity: data.quantity,
       sold: 0,
-      price: data.price,
+      price: listFloor,
+      originalPrice: retail,
+      discountedPrice: listFloor,
+      smartPricingEnabled: data.smartPricingEnabled === true,
       expiryDate: data.expiryDate,
-      expiryTime: Timestamp.fromDate(expiryDateTime),
+      expiryTime: Timestamp.fromDate(data.expiryAt),
       status: "fresh" as ItemStatus,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
@@ -212,23 +229,37 @@ class InventoryService {
     await deleteDoc(itemRef);
   }
 
-  // Auto-update item status based on expiry
-  async updateItemStatuses(sellerId: string): Promise<void> {
+  /**
+   * Removes expired listings and refreshes status for the rest.
+   * Runs on seller dashboard load and when buyers fetch nearby stock.
+   */
+  async updateItemStatuses(sellerId: string): Promise<number> {
     const items = await this.getInventory(sellerId);
     const now = new Date();
+    let deletedCount = 0;
 
     for (const item of items) {
-      if (!item.id || !item.expiryTime) continue;
+      if (!item.id) continue;
 
-      const expiryDate = item.expiryTime.toDate();
+      if (item.status === "expired" || isListingExpired(item, now)) {
+        try {
+          await this.deleteItem(sellerId, item.id);
+          deletedCount++;
+        } catch (err) {
+          console.warn("Failed to delete expired listing:", item.id, err);
+        }
+        continue;
+      }
+
+      const expiry = resolveExpiryDate(item);
+      if (!expiry) continue;
+
       const hoursUntilExpiry =
-        (expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+        (expiry.getTime() - now.getTime()) / (1000 * 60 * 60);
 
       let newStatus: ItemStatus = item.status;
 
-      if (hoursUntilExpiry <= 0) {
-        newStatus = "expired";
-      } else if (hoursUntilExpiry <= 6) {
+      if (hoursUntilExpiry <= 6) {
         newStatus = "expiring";
       } else {
         newStatus = "fresh";
@@ -242,7 +273,28 @@ class InventoryService {
         await this.updateItem(sellerId, item.id, { status: newStatus });
       }
     }
+
+    return deletedCount;
   }
+}
+
+/** True when a listing should appear on seller/buyer active feeds. */
+export function isActiveListing(
+  item: InventoryItem,
+  now: Date = new Date(),
+): boolean {
+  if (item.status === "expired" || item.status === "sold_out") return false;
+
+  const remaining = (item.quantity ?? 0) - (item.sold ?? 0);
+  if (remaining <= 0) return false;
+
+  if (isListingExpired(item, now)) return false;
+
+  return (
+    item.status === "active" ||
+    item.status === "fresh" ||
+    item.status === "expiring"
+  );
 }
 
 export const inventoryService = new InventoryService();
@@ -261,13 +313,9 @@ class OrderService {
   async updateOrderStatus(
     sellerId: string,
     orderId: string,
-    status: Order["status"]
+    status: Order["status"],
   ): Promise<void> {
-    const orderRef = doc(db, "sellers", sellerId, "orders", orderId);
-    await updateDoc(orderRef, {
-      status,
-      updatedAt: Timestamp.now(),
-    });
+    await syncSellerAndBuyerOrderStatus(sellerId, orderId, status);
   }
 }
 

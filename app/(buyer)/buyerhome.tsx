@@ -3,9 +3,16 @@ import {
   AvailableBag,
   getAvailableBags,
 } from "@/src/services/firebase/buyerInventory";
+import type { ItemCategory } from "@/src/services/firebase/inventoryServices";
 import { BuyerStats, getBuyerStats } from "@/src/services/firebase/buyerStats";
 import { auth } from "@/src/services/firebase/config";
+import {
+  BuyerProfile,
+  getUserProfile,
+} from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
+import { formatCo2, formatMeals } from "@/src/utils/impactMetrics";
+import { BUYER_ROUTES, pushWithReturn } from "@/src/utils/navigation";
 import {
   addRecentLocation,
   getPreferredLocation,
@@ -13,29 +20,155 @@ import {
   savePreferredLocation,
 } from "@/src/utils/locationPreference";
 import Constants from "expo-constants";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { router, useFocusEffect } from "expo-router";
 import {
+  ChevronRight,
   Clock,
+  Flame,
+  Leaf,
   MapPin,
+  Package,
   Search,
+  ShoppingBag,
   ShoppingCart,
+  SlidersHorizontal,
+  Sparkles,
   Star,
   TrendingDown,
   User,
   X,
+  Zap,
 } from "lucide-react-native";
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   TouchableOpacity,
   View,
 } from "react-native";
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+type FilterKey = "all" | "mystery" | "items" | "deals";
+type PriceRangeKey = "any" | "under10" | "10-20" | "20-30" | "over30";
+type SortKey = "distance" | "price_asc" | "price_desc" | "discount";
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "mystery", label: "Mystery bags" },
+  { key: "items", label: "Items" },
+  { key: "deals", label: "Best deals" },
+];
+
+const CATEGORY_OPTIONS: { key: ItemCategory | "all"; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "Bakery", label: "Bakery" },
+  { key: "Pastries", label: "Pastries" },
+  { key: "Bread", label: "Bread" },
+  { key: "Desserts", label: "Desserts" },
+  { key: "Meals", label: "Meals" },
+  { key: "Beverages", label: "Beverages" },
+  { key: "Other", label: "Other" },
+];
+
+const PRICE_RANGES: { key: PriceRangeKey; label: string }[] = [
+  { key: "any", label: "Any price" },
+  { key: "under10", label: "Under RM10" },
+  { key: "10-20", label: "RM10–20" },
+  { key: "20-30", label: "RM20–30" },
+  { key: "over30", label: "RM30+" },
+];
+
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: "distance", label: "Nearest" },
+  { key: "price_asc", label: "Price ↑" },
+  { key: "price_desc", label: "Price ↓" },
+  { key: "discount", label: "Top discount" },
+];
+
+const getDiscountPct = (bag: AvailableBag) => {
+  const original = bag.originalPrice || bag.price;
+  const discounted = bag.discountedPrice || bag.price;
+  if (original <= 0) return 0;
+  return Math.round(((original - discounted) / original) * 100);
+};
+
+const getBagPrice = (bag: AvailableBag) =>
+  bag.discountedPrice ?? bag.price ?? 0;
+
+const matchesPriceRange = (bag: AvailableBag, range: PriceRangeKey) => {
+  const price = getBagPrice(bag);
+  switch (range) {
+    case "under10":
+      return price < 10;
+    case "10-20":
+      return price >= 10 && price < 20;
+    case "20-30":
+      return price >= 20 && price < 30;
+    case "over30":
+      return price >= 30;
+    default:
+      return true;
+  }
+};
+
+function FilterChip({
+  label,
+  active,
+  onPress,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={[filterStyles.chip, active && filterStyles.chipActive]}
+    >
+      <Text style={[filterStyles.chipText, active && filterStyles.chipTextActive]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+const filterStyles = StyleSheet.create({
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginRight: 8,
+  },
+  chipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  chipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textSoft,
+  },
+  chipTextActive: {
+    color: colors.white,
+  },
+});
 
 type MapLocation = {
   latitude: number;
@@ -83,9 +216,14 @@ const getDistanceKm = (
 export default function BuyerHome() {
   const [stats, setStats] = useState<BuyerStats | null>(null);
   const [bags, setBags] = useState<AvailableBag[]>([]);
-  const [filteredBags, setFilteredBags] = useState<AvailableBag[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<ItemCategory | "all">(
+    "all",
+  );
+  const [priceRange, setPriceRange] = useState<PriceRangeKey>("any");
+  const [sortBy, setSortBy] = useState<SortKey>("distance");
   const [locationSearchQuery, setLocationSearchQuery] = useState("");
   const [settingLocation, setSettingLocation] = useState(false);
   const [searchingLocation, setSearchingLocation] = useState(false);
@@ -101,6 +239,9 @@ export default function BuyerHome() {
     longitude: 101.6869,
   });
   const [headerSearchActive, setHeaderSearchActive] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [buyerName, setBuyerName] = useState("");
+  const [activeFilter, setActiveFilter] = useState<FilterKey>("all");
 
   // 🔹 INITIALIZATION
   useEffect(() => {
@@ -125,8 +266,14 @@ export default function BuyerHome() {
 
     setLoading(true);
     try {
-      const buyerStats = await getBuyerStats(user.uid);
+      const [buyerStats, profile] = await Promise.all([
+        getBuyerStats(user.uid),
+        getUserProfile(user.uid),
+      ]);
       setStats(buyerStats);
+      if (profile && profile.role === "buyer") {
+        setBuyerName((profile as BuyerProfile).fullName.split(" ")[0] || "");
+      }
       const recent = await getRecentLocations();
       setRecentLocations(recent);
 
@@ -180,7 +327,6 @@ export default function BuyerHome() {
       .sort((a, b) => a.distance - b.distance);
 
     setBags(recalculated);
-    setFilteredBags(recalculated);
   };
 
   const persistRecent = async (entry: {
@@ -470,68 +616,342 @@ export default function BuyerHome() {
     }
   };
 
-  // 🔹 FILTER SEARCH
-  useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredBags(bags);
-      return;
-    }
-
-    const filtered = bags.filter(
-      (bag) =>
-        bag.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        bag.sellerName.toLowerCase().includes(searchQuery.toLowerCase()),
-    );
-    setFilteredBags(filtered);
-  }, [bags, searchQuery]);
-
-  const calculateDiscount = (original: number, discounted: number) =>
-    Math.round(((original - discounted) / original) * 100);
-
   const formatTime = (timeString: string) => timeString || "N/A";
   const getLeftCount = (item: AvailableBag) => item.quantity - (item.sold || 0);
+
+  const advancedFilterCount = useMemo(() => {
+    let n = 0;
+    if (selectedCategory !== "all") n += 1;
+    if (priceRange !== "any") n += 1;
+    if (sortBy !== "distance") n += 1;
+    return n;
+  }, [selectedCategory, priceRange, sortBy]);
+
+  const clearAdvancedFilters = () => {
+    setSelectedCategory("all");
+    setPriceRange("any");
+    setSortBy("distance");
+  };
+
+  const displayBags = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    let list = bags.filter((bag) => {
+      if (q) {
+        const matchesSearch =
+          bag.name.toLowerCase().includes(q) ||
+          bag.sellerName.toLowerCase().includes(q) ||
+          String(bag.category || "")
+            .toLowerCase()
+            .includes(q);
+        if (!matchesSearch) return false;
+      }
+
+      if (selectedCategory !== "all" && bag.category !== selectedCategory) {
+        return false;
+      }
+      if (!matchesPriceRange(bag, priceRange)) return false;
+
+      if (activeFilter === "mystery" && bag.type !== "bag") return false;
+      if (activeFilter === "items" && bag.type === "bag") return false;
+      if (activeFilter === "deals" && getDiscountPct(bag) <= 0) return false;
+
+      return true;
+    });
+
+    const effectiveSort =
+      activeFilter === "deals" ? "discount" : sortBy;
+
+    if (effectiveSort === "discount") {
+      list = [...list].sort((a, b) => getDiscountPct(b) - getDiscountPct(a));
+    } else if (effectiveSort === "price_asc") {
+      list = [...list].sort((a, b) => getBagPrice(a) - getBagPrice(b));
+    } else if (effectiveSort === "price_desc") {
+      list = [...list].sort((a, b) => getBagPrice(b) - getBagPrice(a));
+    } else {
+      list = [...list].sort((a, b) => a.distance - b.distance);
+    }
+
+    return list;
+  }, [
+    bags,
+    searchQuery,
+    selectedCategory,
+    priceRange,
+    activeFilter,
+    sortBy,
+  ]);
+
+  const endingSoonBags = useMemo(
+    () =>
+      displayBags
+        .filter((b) => getLeftCount(b) <= 3)
+        .slice(0, 10),
+    [displayBags],
+  );
+
+  const bestDeal = useMemo(() => {
+    if (!displayBags.length) return null;
+    return [...displayBags].sort(
+      (a, b) => getDiscountPct(b) - getDiscountPct(a),
+    )[0];
+  }, [displayBags]);
+
+  const lowestPrice = useMemo(() => {
+    if (!displayBags.length) return null;
+    return Math.min(...displayBags.map((b) => getBagPrice(b)));
+  }, [displayBags]);
+
+  const navigateToBag = (bag: AvailableBag) => {
+    if (bag.type === "bag") {
+      pushWithReturn(
+        router,
+        "/(buyer)/mysterydetail/[id]",
+        BUYER_ROUTES.home,
+        { id: bag.id ?? "" },
+      );
+    } else {
+      pushWithReturn(
+        router,
+        "/(buyer)/itemdetail/[id]",
+        BUYER_ROUTES.home,
+        { id: bag.id ?? "" },
+      );
+    }
+  };
+
+  const renderBagCard = (bag: AvailableBag, index: number, compact = false) => {
+    const leftCount = getLeftCount(bag);
+    const discount = getDiscountPct(bag);
+    const lat = Number(bag.latitude);
+    const lng = Number(bag.longitude);
+    const computedDistance =
+      Number.isFinite(lat) && Number.isFinite(lng)
+        ? getDistanceKm(
+            userLocation.latitude,
+            userLocation.longitude,
+            lat,
+            lng,
+          )
+        : bag.distance;
+    const isMystery = bag.type === "bag";
+
+    if (compact) {
+      return (
+        <TouchableOpacity
+          key={bag.id || `compact-${index}`}
+          style={styles.compactCard}
+          activeOpacity={0.92}
+          onPress={() => navigateToBag(bag)}
+        >
+          <View style={styles.compactImageWrap}>
+            {bag.imageUrl ? (
+              <Image source={{ uri: bag.imageUrl }} style={styles.compactImage} />
+            ) : (
+              <View style={styles.compactPlaceholder}>
+                <ShoppingBag size={24} color={colors.primary} />
+              </View>
+            )}
+            {discount > 0 && (
+              <View style={styles.compactDiscount}>
+                <Text style={styles.compactDiscountText}>-{discount}%</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.compactName} numberOfLines={2}>
+            {bag.name}
+          </Text>
+          <Text style={styles.compactShop} numberOfLines={1}>
+            {bag.sellerName}
+          </Text>
+          <View style={styles.compactFooter}>
+            <Text style={styles.compactPrice}>
+              RM {(bag.discountedPrice || bag.price).toFixed(2)}
+            </Text>
+            <View style={styles.compactUrgent}>
+              <Flame size={11} color={colors.error} />
+              <Text style={styles.compactUrgentText}>{leftCount} left</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
+    return (
+      <TouchableOpacity
+        key={bag.id || index}
+        style={styles.bagCard}
+        activeOpacity={0.92}
+        onPress={() => navigateToBag(bag)}
+      >
+        <View style={styles.bagImageWrap}>
+          {bag.imageUrl ? (
+            <Image source={{ uri: bag.imageUrl }} style={styles.bagImage} />
+          ) : (
+            <View style={styles.bagImagePlaceholder}>
+              <ShoppingBag size={36} color={colors.primary} />
+            </View>
+          )}
+          {discount > 0 && (
+            <View style={styles.discountBadge}>
+              <TrendingDown size={12} color={colors.white} />
+              <Text style={styles.discountText}>-{discount}%</Text>
+            </View>
+          )}
+          {isMystery && (
+            <View style={styles.mysteryPill}>
+              <Text style={styles.mysteryPillText}>Mystery bag</Text>
+            </View>
+          )}
+          {bag.category ? (
+            <View style={styles.categoryPill}>
+              <Text style={styles.categoryPillText}>{bag.category}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.bagBody}>
+          <View style={styles.bagTitleRow}>
+            <Text style={styles.bagName} numberOfLines={1}>
+              {bag.name}
+            </Text>
+            <View
+              style={[
+                styles.stockPill,
+                leftCount <= 2 && styles.stockPillUrgent,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.stockPillText,
+                  leftCount <= 2 && styles.stockPillTextUrgent,
+                ]}
+              >
+                {leftCount} left
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.shopName} numberOfLines={1}>
+            {bag.sellerName}
+          </Text>
+
+          <View style={styles.bagMeta}>
+            <Star size={13} color="#FFC107" fill="#FFC107" />
+            <Text style={styles.ratingText}>{bag.rating.toFixed(1)}</Text>
+            <Text style={styles.metaDot}>·</Text>
+            <MapPin size={13} color={colors.textSoft} />
+            <Text style={styles.distanceText}>
+              {computedDistance.toFixed(1)} km
+            </Text>
+            <Text style={styles.metaDot}>·</Text>
+            <Clock size={13} color={colors.textSoft} />
+            <Text style={styles.timeText}>{formatTime(bag.expiryDate)}</Text>
+          </View>
+
+          <View style={styles.bagFooter}>
+            <View>
+              <Text style={styles.price}>
+                RM {(bag.discountedPrice || bag.price).toFixed(2)}
+              </Text>
+              {bag.originalPrice &&
+                bag.originalPrice > (bag.discountedPrice || bag.price) && (
+                  <Text style={styles.originalPrice}>
+                    RM {bag.originalPrice.toFixed(2)}
+                  </Text>
+                )}
+            </View>
+            <View style={styles.reserveHint}>
+              <Text style={styles.reserveHintText}>View deal</Text>
+              <ChevronRight size={16} color={colors.primary} />
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const user = auth.currentUser;
+      if (user) {
+        const buyerStats = await getBuyerStats(user.uid);
+        setStats(buyerStats);
+        await loadBagsByLocation(userLocation);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <ActivityIndicator
-          size="large"
-          color={colors.primary}
-          style={{ marginTop: 200 }}
-        />
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Finding deals near you…</Text>
+        </View>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.locationLabel}>Location</Text>
+        <View style={styles.headerDecor} />
+        <View style={styles.headerTop}>
+          <View style={styles.headerIntro}>
+            <View style={styles.greetingRow}>
+              <Sparkles size={14} color="rgba(255,255,255,0.9)" />
+              <Text style={styles.greeting}>
+                {getGreeting()}
+                {buyerName ? `, ${buyerName}` : ""}
+              </Text>
+            </View>
+            <Text style={styles.headerTitle}>Rescue food nearby</Text>
+          </View>
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() =>
+                pushWithReturn(router, "/(buyer)/buyercart", BUYER_ROUTES.home)
+              }
+            >
+              <ShoppingCart size={22} color={colors.white} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => router.push("/(buyer)/buyerprofile")}
+            >
+              <User size={22} color={colors.white} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.locationBlock}>
+          <Text style={styles.locationLabel}>Delivering near</Text>
           {!headerSearchActive ? (
             <TouchableOpacity
-              style={styles.locationRow}
+              style={styles.locationPill}
               onPress={() => setHeaderSearchActive(true)}
+              activeOpacity={0.85}
             >
-              <MapPin size={20} color={colors.white} />
-              <Text
-                style={styles.locationText}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
+              <MapPin size={18} color={colors.primary} />
+              <Text style={styles.locationPillText} numberOfLines={1}>
                 {location}
               </Text>
+              <ChevronRight size={16} color={colors.textSoft} />
             </TouchableOpacity>
           ) : (
             <View style={styles.headerLocationInputRow}>
-              <MapPin size={18} color={colors.white} />
+              <MapPin size={18} color={colors.primary} />
               <TextInput
                 style={styles.headerLocationInput}
-                placeholder="Search location..."
+                placeholder="Search area or city..."
                 value={locationSearchQuery}
                 onChangeText={setLocationSearchQuery}
-                placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                placeholderTextColor={colors.textSoft}
                 autoFocus
               />
               {locationSearchQuery.length > 0 && (
@@ -541,31 +961,40 @@ export default function BuyerHome() {
                     setLocationSuggestions([]);
                   }}
                 >
-                  <X size={16} color={colors.white} />
+                  <X size={18} color={colors.textSoft} />
                 </TouchableOpacity>
               )}
             </View>
           )}
-        </View>
-        <View style={styles.headerRight}>
-          <TouchableOpacity
-            style={styles.cartButton}
-            onPress={() => router.push("/(buyer)/buyercart")}
-          >
-            <ShoppingCart size={24} color={colors.white} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.profileButton}
-            onPress={() => router.push("/(buyer)/buyerprofile")}
-          >
-            <User size={24} color={colors.white} />
-          </TouchableOpacity>
         </View>
       </View>
 
       {/* Location Suggestions Dropdown */}
       {headerSearchActive && (
         <View style={styles.headerSuggestionsContainer}>
+          {locationSearchQuery.trim().length < 3 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.quickCitiesScroll}
+              contentContainerStyle={styles.quickCitiesContent}
+            >
+              {QUICK_CITY_LOCATIONS.map((city) => (
+                <TouchableOpacity
+                  key={city.label}
+                  style={styles.quickCityChip}
+                  onPress={() => {
+                    applySelectedLocation(city);
+                    setHeaderSearchActive(false);
+                  }}
+                  disabled={settingLocation}
+                >
+                  <Text style={styles.quickCityText}>{city.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
           {recentLocations.length > 0 &&
             locationSearchQuery.trim().length < 3 && (
               <View style={styles.headerRecentSection}>
@@ -650,179 +1079,288 @@ export default function BuyerHome() {
         </View>
       )}
 
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Search */}
-        <View style={styles.searchContainer}>
-          <Search size={20} color={colors.textSoft} style={styles.searchIcon} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search cafes, bakeries..."
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholderTextColor={colors.textSoft}
+      <View style={styles.searchBarSection}>
+        <View style={styles.searchRow}>
+          <View style={styles.searchContainer}>
+            <Search size={18} color={colors.textSoft} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search name, shop, category..."
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholderTextColor={colors.textSoft}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery("")}>
+                <X size={18} color={colors.textSoft} />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity
+            style={[
+              styles.filterToggleBtn,
+              filtersOpen && styles.filterToggleBtnActive,
+            ]}
+            onPress={() => setFiltersOpen((open) => !open)}
+            activeOpacity={0.85}
+          >
+            <SlidersHorizontal size={18} color={colors.white} />
+            <Text style={styles.filterToggleLabel}>Filter</Text>
+            {advancedFilterCount > 0 ? (
+              <View style={styles.filterBadge}>
+                <Text style={styles.filterBadgeText}>{advancedFilterCount}</Text>
+              </View>
+            ) : null}
+          </TouchableOpacity>
+        </View>
+
+        {filtersOpen ? (
+          <View style={styles.filtersPanel}>
+            <View style={styles.filtersPanelHeader}>
+              <Text style={styles.filtersPanelTitle}>Filters</Text>
+              {advancedFilterCount > 0 ? (
+                <TouchableOpacity onPress={clearAdvancedFilters}>
+                  <Text style={styles.filtersClearText}>Clear all</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <Text style={styles.filterGroupLabel}>Category</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterChipRow}
+            >
+              {CATEGORY_OPTIONS.map((opt) => (
+                <FilterChip
+                  key={opt.key}
+                  label={opt.label}
+                  active={selectedCategory === opt.key}
+                  onPress={() => setSelectedCategory(opt.key)}
+                />
+              ))}
+            </ScrollView>
+
+            <Text style={styles.filterGroupLabel}>Price</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterChipRow}
+            >
+              {PRICE_RANGES.map((opt) => (
+                <FilterChip
+                  key={opt.key}
+                  label={opt.label}
+                  active={priceRange === opt.key}
+                  onPress={() => setPriceRange(opt.key)}
+                />
+              ))}
+            </ScrollView>
+
+            <Text style={styles.filterGroupLabel}>Sort by</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterChipRow}
+            >
+              {SORT_OPTIONS.map((opt) => (
+                <FilterChip
+                  key={opt.key}
+                  label={opt.label}
+                  active={sortBy === opt.key}
+                  onPress={() => setSortBy(opt.key)}
+                />
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+      </View>
+
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        style={styles.mainScroll}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor={colors.primary}
           />
-        </View>
-
-        {/* Stats Card */}
-        <View style={styles.statsCard}>
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{stats?.bagsSaved || 0}</Text>
-            <Text style={styles.statLabel}>Bags Saved</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>
-              RM {stats?.moneySaved.toFixed(0) || 0}
+        }
+      >
+        <View style={styles.body}>
+          <LinearGradient
+            colors={["#6a3c00", "#8B5A2B", "#A67C52"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.heroCard}
+          >
+            <View style={styles.heroDecor} />
+            <View style={styles.heroTop}>
+              <View style={styles.heroBadge}>
+                <Zap size={14} color={colors.white} />
+                <Text style={styles.heroBadgeText}>Surplus deals</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.heroMapBtn}
+                onPress={() => router.push("/(buyer)/buyermap")}
+              >
+                <MapPin size={16} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.heroTitle}>
+              {displayBags.length > 0
+                ? `${displayBags.length} deals near you`
+                : "Discover food nearby"}
             </Text>
-            <Text style={styles.statLabel}>Money Saved</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
-            <Text style={styles.statNumber}>{stats?.co2Saved || 0} kg</Text>
-            <Text style={styles.statLabel}>CO₂ Saved</Text>
-          </View>
-        </View>
+            <Text style={styles.heroSub}>
+              {lowestPrice != null
+                ? `From RM ${lowestPrice.toFixed(2)} · Save food before it goes to waste`
+                : "Set your location to see surplus from local cafés"}
+            </Text>
+            {bestDeal && getDiscountPct(bestDeal) > 0 ? (
+              <TouchableOpacity
+                style={styles.heroDealRow}
+                onPress={() => navigateToBag(bestDeal)}
+                activeOpacity={0.9}
+              >
+                <View style={styles.heroDealLeft}>
+                  <Text style={styles.heroDealLabel}>Top pick</Text>
+                  <Text style={styles.heroDealName} numberOfLines={1}>
+                    {bestDeal.name}
+                  </Text>
+                </View>
+                <View style={styles.heroDealBadge}>
+                  <Text style={styles.heroDealBadgeText}>
+                    -{getDiscountPct(bestDeal)}%
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
+            <View style={styles.heroStats}>
+              <View style={styles.heroStat}>
+                <Text style={styles.heroStatVal}>
+                  {formatMeals(stats?.mealsRescued ?? 0)}
+                </Text>
+                <Text style={styles.heroStatLbl}>meals</Text>
+              </View>
+              <View style={styles.heroStatDivider} />
+              <View style={styles.heroStat}>
+                <Text style={styles.heroStatVal}>
+                  RM {(stats?.moneySaved ?? 0).toFixed(0)}
+                </Text>
+                <Text style={styles.heroStatLbl}>saved</Text>
+              </View>
+              <View style={styles.heroStatDivider} />
+              <View style={styles.heroStat}>
+                <Text style={styles.heroStatVal}>
+                  {formatCo2(stats?.co2Saved ?? 0)}
+                </Text>
+                <Text style={styles.heroStatLbl}>CO₂ cut</Text>
+              </View>
+            </View>
+          </LinearGradient>
 
-        {/* Available Near You */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Available Near You</Text>
-            <TouchableOpacity>
-              <Text style={styles.viewAllText}>View All</Text>
-            </TouchableOpacity>
-          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterScroll}
+            contentContainerStyle={styles.filterRow}
+          >
+            {FILTERS.map((f) => (
+              <FilterChip
+                key={f.key}
+                label={f.label}
+                active={activeFilter === f.key}
+                onPress={() => setActiveFilter(f.key)}
+              />
+            ))}
+          </ScrollView>
 
-          {filteredBags.length === 0 ? (
+          {endingSoonBags.length > 0 && activeFilter === "all" ? (
+            <View style={styles.carouselSection}>
+              <View style={styles.carouselHeader}>
+                <View style={styles.carouselTitleRow}>
+                  <Flame size={18} color={colors.error} />
+                  <Text style={styles.carouselTitle}>Ending soon</Text>
+                </View>
+                <Text style={styles.carouselSub}>Grab them before they&apos;re gone</Text>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.carouselContent}
+              >
+                {endingSoonBags.map((bag, i) => renderBagCard(bag, i, true))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={styles.sectionTitle}>
+                  {activeFilter === "deals"
+                    ? "Best deals"
+                    : activeFilter === "mystery"
+                      ? "Mystery bags"
+                      : activeFilter === "items"
+                        ? "Single items"
+                        : "All listings"}
+                </Text>
+                <Text style={styles.sectionSubtitle}>
+                  {displayBags.length} available
+                  {activeFilter === "deals" || sortBy === "discount"
+                    ? " · best discount first"
+                    : sortBy === "price_asc"
+                      ? " · lowest price first"
+                      : sortBy === "price_desc"
+                        ? " · highest price first"
+                        : " · nearest first"}
+                </Text>
+              </View>
+            </View>
+
+          {displayBags.length === 0 ? (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyText}>No bags available nearby</Text>
+              <View style={styles.emptyIconWrap}>
+                <Package size={32} color={colors.primary} />
+              </View>
+              <Text style={styles.emptyText}>No listings nearby</Text>
               <Text style={styles.emptySubtext}>
-                Check back later for new listings!
+                Try another area, adjust filters, or check back soon for fresh
+                surplus deals.
               </Text>
+              <TouchableOpacity
+                style={styles.emptyBtn}
+                onPress={() => setHeaderSearchActive(true)}
+              >
+                <MapPin size={16} color={colors.white} />
+                <Text style={styles.emptyBtnText}>Change location</Text>
+              </TouchableOpacity>
             </View>
           ) : (
-            filteredBags.map((bag, index) => {
-              const leftCount = getLeftCount(bag);
-              const discount = calculateDiscount(
-                bag.originalPrice || bag.price,
-                bag.discountedPrice || bag.price,
-              );
-              const lat = Number(bag.latitude);
-              const lng = Number(bag.longitude);
-              const computedDistance =
-                Number.isFinite(lat) && Number.isFinite(lng)
-                  ? getDistanceKm(
-                      userLocation.latitude,
-                      userLocation.longitude,
-                      lat,
-                      lng,
-                    )
-                  : bag.distance;
-
-              return (
-                <TouchableOpacity
-                  key={bag.id || index}
-                  style={styles.bagCard}
-                  onPress={() => {
-                    // Route to appropriate detail page based on type
-                    if (bag.type === "bag") {
-                      router.push({
-                        pathname: "/(buyer)/mysterydetail/[id]",
-                        params: { id: bag.id },
-                      } as any);
-                    } else {
-                      router.push({
-                        pathname: "/(buyer)/itemdetail/[id]",
-                        params: { id: bag.id },
-                      } as any);
-                    }
-                  }}
-                >
-                  <View style={styles.bagImageContainer}>
-                    {bag.imageUrl ? (
-                      <Image
-                        source={{ uri: bag.imageUrl }}
-                        style={styles.bagImage}
-                      />
-                    ) : (
-                      <View style={styles.bagImagePlaceholder}>
-                        <Text style={styles.bagImagePlaceholderText}>
-                          {bag.name.charAt(0).toUpperCase()}
-                        </Text>
-                      </View>
-                    )}
-                    {discount > 0 && (
-                      <View style={styles.discountBadge}>
-                        <TrendingDown size={12} color={colors.white} />
-                        <Text style={styles.discountText}>-{discount}%</Text>
-                      </View>
-                    )}
-                  </View>
-
-                  <View style={styles.bagInfo}>
-                    <Text style={styles.bagName}>{bag.name}</Text>
-                    <Text style={styles.shopName}>{bag.sellerName}</Text>
-
-                    <View style={styles.bagMeta}>
-                      <Star size={14} color="#FFC107" fill="#FFC107" />
-                      <Text style={styles.ratingText}>
-                        {bag.rating.toFixed(1)}
-                      </Text>
-                      <Text style={styles.metaDot}>•</Text>
-                      <MapPin size={14} color={colors.textSoft} />
-                      <Text style={styles.distanceText}>
-                        {computedDistance.toFixed(1)} km
-                      </Text>
-                    </View>
-
-                    <View style={styles.bagTime}>
-                      <Clock size={14} color={colors.textSoft} />
-                      <Text style={styles.timeText}>
-                        {formatTime(bag.expiryDate)}
-                      </Text>
-                    </View>
-
-                    <View style={styles.bagFooter}>
-                      <View>
-                        <Text style={styles.price}>
-                          RM {(bag.discountedPrice || bag.price).toFixed(2)}
-                        </Text>
-                        {bag.originalPrice &&
-                          bag.originalPrice >
-                            (bag.discountedPrice || bag.price) && (
-                            <Text style={styles.originalPrice}>
-                              RM {bag.originalPrice.toFixed(2)}
-                            </Text>
-                          )}
-                      </View>
-                      <View style={styles.leftBadge}>
-                        <Text style={styles.leftText}>{leftCount} left</Text>
-                      </View>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              );
-            })
+            displayBags.map((bag, index) => renderBagCard(bag, index))
           )}
-        </View>
-
-        {/* Impact Card */}
-        <View style={styles.impactCard}>
-          <View style={styles.impactIcon}>
-            <Text style={styles.impactEmoji}>📊</Text>
           </View>
-          <View style={styles.impactContent}>
-            <Text style={styles.impactTitle}>Your Impact This Month</Text>
-            <Text style={styles.impactText}>
-              You&apos;ve saved {stats?.bagsSaved || 0} meals from going to
-              waste and prevented {stats?.co2Saved || 0}kg of CO₂ emissions!
-            </Text>
-            <TouchableOpacity style={styles.detailsButton}>
-              <Text style={styles.detailsButtonText}>View Details</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
 
-        <View style={{ height: 100 }} />
+          <View style={styles.impactBanner}>
+            <View style={styles.impactBannerIcon}>
+              <Leaf size={24} color={colors.success} />
+            </View>
+            <View style={styles.impactBannerContent}>
+              <Text style={styles.impactBannerTitle}>
+                You&apos;re making a difference
+              </Text>
+              <Text style={styles.impactBannerText}>
+                {formatMeals(stats?.mealsRescued ?? 0)} meals rescued and{" "}
+                {formatCo2(stats?.co2Saved ?? 0)} CO₂ kept out of the atmosphere.
+                Keep it up!
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ height: 100 }} />
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -830,80 +1368,135 @@ export default function BuyerHome() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  loadingWrap: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: spacing.md,
+  },
+  loadingText: { fontSize: 14, color: colors.textSoft },
   header: {
     backgroundColor: colors.primary,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xl,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    overflow: "hidden",
+  },
+  headerDecor: {
+    position: "absolute",
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    top: -60,
+    right: -40,
+  },
+  headerTop: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
+    marginBottom: spacing.md,
   },
-  headerLeft: {
-    flex: 1,
-    marginRight: spacing.md,
-  },
-  locationLabel: {
-    fontSize: 12,
-    color: "rgba(255, 255, 255, 0.8)",
-    marginBottom: 4,
-  },
-  locationRow: {
+  headerIntro: { flex: 1, marginRight: spacing.md },
+  greetingRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    minWidth: 0,
+    marginBottom: 4,
   },
-  locationText: {
-    fontSize: 18,
-    fontWeight: "600",
+  greeting: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.9)",
+    fontWeight: "500",
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: "800",
     color: colors.white,
-    flex: 1,
-    minWidth: 0,
+    letterSpacing: -0.3,
   },
-  profileButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    justifyContent: "center",
+  headerActions: { flexDirection: "row", gap: spacing.sm },
+  headerIconBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "rgba(255,255,255,0.2)",
     alignItems: "center",
-    flexShrink: 0,
+    justifyContent: "center",
   },
-  headerRight: {
+  locationBlock: { gap: 6 },
+  locationLabel: {
+    fontSize: 11,
+    color: "rgba(255,255,255,0.75)",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  locationPill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: 8,
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
   },
-  cartButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-    flexShrink: 0,
+  locationPillText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
   },
   headerLocationInputRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    backgroundColor: "rgba(255, 255, 255, 0.15)",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
   },
   headerLocationInput: {
     flex: 1,
-    fontSize: 16,
-    color: colors.white,
+    fontSize: 15,
+    color: colors.text,
+    fontWeight: "600",
   },
   headerSuggestionsContainer: {
     backgroundColor: colors.white,
-    borderBottomLeftRadius: 12,
-    borderBottomRightRadius: 12,
-    maxHeight: 300,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
+    marginHorizontal: spacing.lg,
+    borderRadius: 16,
+    maxHeight: 340,
+    marginTop: -8,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 6,
+    overflow: "hidden",
+  },
+  quickCitiesScroll: { maxHeight: 44 },
+  quickCitiesContent: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: 8,
+  },
+  quickCityChip: {
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  quickCityText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.primary,
   },
   headerRecentSection: {
     paddingHorizontal: spacing.md,
@@ -1056,175 +1649,556 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
+  mainScroll: {
+    flex: 1,
+  },
+  searchBarSection: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    zIndex: 5,
+    elevation: 4,
+  },
+  body: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+  },
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
   searchContainer: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 14,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    margin: spacing.lg,
+    paddingVertical: 12,
+    gap: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  searchIcon: { marginRight: spacing.sm },
   searchInput: { flex: 1, fontSize: 15, color: colors.text },
-  statsCard: {
-    backgroundColor: colors.success,
-    borderRadius: 16,
-    padding: spacing.lg,
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
+  filterToggleBtn: {
     flexDirection: "row",
-    justifyContent: "space-around",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    minWidth: 88,
+    height: 48,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: colors.primary,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    position: "relative",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  statItem: { alignItems: "center" },
-  statNumber: {
-    fontSize: 32,
-    fontWeight: "700",
+  filterToggleBtnActive: {
+    backgroundColor: "#4a2800",
+    borderColor: "#4a2800",
+  },
+  filterToggleLabel: {
+    fontSize: 14,
+    fontWeight: "800",
     color: colors.white,
-    marginBottom: 4,
   },
-  statLabel: { fontSize: 12, color: "rgba(255, 255, 255, 0.9)" },
-  statDivider: { width: 1, backgroundColor: "rgba(255, 255, 255, 0.3)" },
-  section: { paddingHorizontal: spacing.lg, marginBottom: spacing.lg },
-  sectionHeader: {
+  filterBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.error,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  filterBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  filtersPanel: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.sm,
+  },
+  filtersPanelHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.xs,
+  },
+  filtersPanelTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  filtersClearText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.primary,
+  },
+  filterGroupLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textSoft,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: spacing.xs,
+  },
+  filterChipRow: {
+    gap: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  heroCard: {
+    borderRadius: 20,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+    overflow: "hidden",
+  },
+  heroDecor: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    top: -30,
+    right: -20,
+  },
+  heroTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    marginBottom: spacing.sm,
+  },
+  heroBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  heroBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  heroMapBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.white,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: colors.white,
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  heroSub: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.88)",
+    lineHeight: 19,
     marginBottom: spacing.md,
   },
-  sectionTitle: { fontSize: 20, fontWeight: "600", color: colors.text },
-  viewAllText: { fontSize: 14, color: colors.primary, fontWeight: "500" },
-  bagCard: {
-    backgroundColor: colors.white,
+  heroDealRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.15)",
     borderRadius: 12,
+    padding: spacing.sm,
     marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  heroDealLeft: { flex: 1 },
+  heroDealLabel: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.75)",
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  heroDealName: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  heroDealBadge: {
+    backgroundColor: colors.error,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  heroDealBadgeText: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  heroStats: {
+    flexDirection: "row",
+    backgroundColor: "rgba(0,0,0,0.15)",
+    borderRadius: 12,
+    paddingVertical: spacing.sm,
+  },
+  heroStat: { flex: 1, alignItems: "center" },
+  heroStatVal: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  heroStatLbl: {
+    fontSize: 10,
+    color: "rgba(255,255,255,0.75)",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  heroStatDivider: {
+    width: 1,
+    backgroundColor: "rgba(255,255,255,0.25)",
+  },
+  filterScroll: { marginBottom: spacing.md, marginHorizontal: -spacing.lg },
+  filterRow: { paddingHorizontal: spacing.lg },
+  carouselSection: { marginBottom: spacing.lg },
+  carouselHeader: { marginBottom: spacing.sm },
+  carouselTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 2,
+  },
+  carouselTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  carouselSub: { fontSize: 12, color: colors.textSoft },
+  carouselContent: { gap: spacing.md, paddingRight: spacing.lg },
+  compactCard: {
+    width: 156,
+    backgroundColor: colors.white,
+    borderRadius: 16,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: colors.border,
-    flexDirection: "row",
+    borderColor: "rgba(0,0,0,0.06)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  bagImageContainer: { width: 120, height: 140, position: "relative" },
-  bagImage: { width: "100%", height: "100%" },
-  bagImagePlaceholder: {
-    width: "100%",
-    height: "100%",
+  compactImageWrap: {
+    height: 100,
     backgroundColor: colors.primarySoft,
-    justifyContent: "center",
+    position: "relative",
+  },
+  compactImage: { width: "100%", height: "100%" },
+  compactPlaceholder: {
+    flex: 1,
     alignItems: "center",
+    justifyContent: "center",
   },
-  bagImagePlaceholderText: {
-    fontSize: 48,
-    fontWeight: "600",
-    color: colors.primary,
-  },
-  discountBadge: {
+  compactDiscount: {
     position: "absolute",
     top: 8,
     left: 8,
     backgroundColor: colors.error,
     borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+  },
+  compactDiscountText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: colors.white,
+  },
+  compactName: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    lineHeight: 17,
+  },
+  compactShop: {
+    fontSize: 11,
+    color: colors.textSoft,
+    paddingHorizontal: 10,
+    marginTop: 2,
+  },
+  compactFooter: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 10,
+    paddingTop: 8,
+  },
+  compactPrice: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  compactUrgent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+  compactUrgentText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.error,
+  },
+  section: { marginBottom: spacing.lg },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+    marginBottom: spacing.md,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: colors.text,
+    letterSpacing: -0.2,
+  },
+  sectionSubtitle: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: 2,
+  },
+  bagCard: {
+    backgroundColor: colors.white,
+    borderRadius: 18,
+    marginBottom: spacing.md,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  bagImageWrap: {
+    width: "100%",
+    height: 160,
+    position: "relative",
+    backgroundColor: colors.primarySoft,
+  },
+  bagImage: { width: "100%", height: "100%" },
+  bagImagePlaceholder: {
+    width: "100%",
+    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  discountBadge: {
+    position: "absolute",
+    top: 10,
+    left: 10,
+    backgroundColor: colors.error,
+    borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 4,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
   },
-  discountText: { fontSize: 12, fontWeight: "600", color: colors.white },
-  bagInfo: { flex: 1, padding: spacing.md, justifyContent: "space-between" },
-  bagName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.text,
-    marginBottom: 2,
+  discountText: { fontSize: 12, fontWeight: "700", color: colors.white },
+  mysteryPill: {
+    position: "absolute",
+    bottom: 10,
+    left: 10,
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
   },
+  mysteryPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.white,
+  },
+  categoryPill: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  categoryPillText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.primary,
+  },
+  bagBody: { padding: spacing.md },
+  bagTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    marginBottom: 4,
+  },
+  bagName: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  stockPill: {
+    backgroundColor: colors.successSoft,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  stockPillUrgent: {
+    backgroundColor: colors.errorSoft,
+  },
+  stockPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.success,
+  },
+  stockPillTextUrgent: { color: colors.error },
   shopName: {
     fontSize: 13,
     color: colors.textSoft,
-    marginBottom: 6,
+    marginBottom: 8,
+    fontWeight: "500",
   },
   bagMeta: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 4,
-    marginBottom: 6,
+    marginBottom: spacing.md,
   },
-  ratingText: { fontSize: 13, color: colors.text, fontWeight: "500" },
-  metaDot: { fontSize: 13, color: colors.textSoft },
-  distanceText: { fontSize: 13, color: colors.textSoft },
-  bagTime: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 12,
-  },
-  timeText: { fontSize: 13, color: colors.textSoft },
+  ratingText: { fontSize: 12, color: colors.text, fontWeight: "600" },
+  metaDot: { fontSize: 12, color: colors.textSoft },
+  distanceText: { fontSize: 12, color: colors.textSoft },
+  timeText: { fontSize: 12, color: colors.textSoft },
   bagFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-end",
+    alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm,
   },
-  price: { fontSize: 20, fontWeight: "700", color: colors.primary },
+  price: { fontSize: 22, fontWeight: "800", color: colors.primary },
   originalPrice: {
-    fontSize: 13,
+    fontSize: 12,
     color: colors.textSoft,
     textDecorationLine: "line-through",
+    marginTop: 2,
   },
-  leftBadge: {
-    backgroundColor: colors.errorSoft,
-    borderRadius: 12,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: colors.error,
+  reserveHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
   },
-  leftText: { fontSize: 12, fontWeight: "600", color: colors.error },
-  impactCard: {
+  reserveHintText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.primary,
+  },
+  impactBanner: {
+    flexDirection: "row",
     backgroundColor: colors.successSoft,
     borderRadius: 16,
-    padding: spacing.lg,
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
-    flexDirection: "row",
+    padding: spacing.md,
     gap: spacing.md,
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: "rgba(143,151,121,0.25)",
   },
-  impactIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  impactBannerIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
     backgroundColor: colors.white,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
   },
-  impactEmoji: { fontSize: 28 },
-  impactContent: { flex: 1 },
-  impactTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 6,
-    color: colors.text,
-  },
-  impactText: {
-    fontSize: 13,
-    color: colors.textSoft,
-    lineHeight: 20,
-    marginBottom: spacing.sm,
-  },
-  detailsButton: {
-    alignSelf: "flex-start",
-    backgroundColor: colors.white,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 8,
-  },
-  detailsButtonText: { fontSize: 13, fontWeight: "600", color: colors.text },
-  emptyState: { alignItems: "center", paddingVertical: spacing.xl * 2 },
-  emptyText: {
-    fontSize: 16,
-    fontWeight: "500",
+  impactBannerContent: { flex: 1 },
+  impactBannerTitle: {
+    fontSize: 15,
+    fontWeight: "800",
     color: colors.text,
     marginBottom: 4,
   },
-  emptySubtext: { fontSize: 14, color: colors.textSoft },
+  impactBannerText: {
+    fontSize: 13,
+    color: colors.textSoft,
+    lineHeight: 20,
+  },
+  emptyState: {
+    alignItems: "center",
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
+  },
+  emptyIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.md,
+  },
+  emptyText: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 6,
+    textAlign: "center",
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: colors.textSoft,
+    textAlign: "center",
+    lineHeight: 21,
+    marginBottom: spacing.lg,
+  },
+  emptyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: 12,
+  },
+  emptyBtnText: {
+    color: colors.white,
+    fontWeight: "700",
+    fontSize: 14,
+  },
 });

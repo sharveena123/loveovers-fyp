@@ -1,6 +1,12 @@
 import { db } from "@/src/services/firebase/config";
 import * as Location from "expo-location";
-import { doc, getDoc, setDoc, Timestamp, updateDoc } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  Timestamp,
+  updateDoc,
+} from "firebase/firestore";
 
 export type UserRole = "buyer" | "seller";
 
@@ -40,6 +46,29 @@ export interface BuyerPreferences {
   updatedAt: Timestamp | Date;
 }
 
+export type SellerVerificationType =
+  | "business_verified"
+  | "manual_verification";
+
+export type SellerVerificationStatus =
+  | "pending_review"
+  | "approved"
+  | "rejected";
+
+export interface BusinessVerificationData {
+  ssmRegistrationNumber: string;
+  businessAddress: string;
+  googleMapsLink: string;
+  storefrontImageUrl: string;
+}
+
+export interface ManualVerificationData {
+  workspacePhotoUrls: string[];
+  sampleProductPhotoUrls: string[];
+  socialMediaLink: string;
+  businessDescription: string;
+}
+
 export interface SellerProfile {
   uid: string;
   email: string;
@@ -48,10 +77,22 @@ export interface SellerProfile {
   businessName: string;
   phone: string;
   businessAddress: string;
+  profileImageUrl?: string;
+  verificationType?: SellerVerificationType;
+  verificationStatus?: SellerVerificationStatus;
+  businessVerification?: BusinessVerificationData;
+  manualVerification?: ManualVerificationData;
+  verificationSubmittedAt?: Timestamp | Date;
+  verificationReviewedAt?: Timestamp | Date;
+  verificationReviewNote?: string;
   tier?: "Free" | "Premium" | "Premium Seller";
   cafeId?: string;
   operatingHours?: OperatingHours;
   settings?: BusinessSettings;
+  /** 12–23: hour when closing-window markdown peaks (local device time). Default 20. */
+  smartPricingClosingHour?: number;
+  /** Master switch: new mystery bags default to smart pricing when true. */
+  smartPricingStoreDefault?: boolean;
   createdAt: Timestamp | Date;
   updatedAt: Timestamp | Date;
 }
@@ -212,6 +253,19 @@ export async function updateSellerProfile(
     ...updates,
     updatedAt: Timestamp.now(),
   });
+
+  // Buyer feed reads `sellers/{id}` — mirror smart-pricing fields so live markdown matches dashboard.
+  const sellerMirror: Record<string, unknown> = {};
+  if ("smartPricingClosingHour" in updates) {
+    sellerMirror.smartPricingClosingHour = updates.smartPricingClosingHour;
+  }
+  if ("smartPricingStoreDefault" in updates) {
+    sellerMirror.smartPricingStoreDefault = updates.smartPricingStoreDefault;
+  }
+  if (Object.keys(sellerMirror).length > 0) {
+    sellerMirror.updatedAt = Timestamp.now();
+    await setDoc(doc(db, "sellers", uid), sellerMirror, { merge: true });
+  }
 }
 
 // Generic update user profile

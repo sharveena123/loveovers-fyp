@@ -8,6 +8,7 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "./config";
+import { computeLiveListingPrice } from "@/src/services/pricing/dynamicPricing";
 import { InventoryItem, inventoryService } from "./inventoryServices";
 
 export interface AvailableBag extends InventoryItem {
@@ -17,6 +18,9 @@ export interface AvailableBag extends InventoryItem {
   rating: number;
   latitude: number;
   longitude: number;
+  /** Extra markdown % applied on top of list floor when smart pricing is on. */
+  smartLiveMarkdownPct?: number;
+  smartAbVariant?: "A" | "B";
 }
 
 type Coordinates = {
@@ -132,11 +136,31 @@ export const getAvailableBags = async (userLocation: {
 
     // Get all sellers
     const sellersSnapshot = await getDocs(collection(db, "sellers"));
+    const now = new Date();
 
     for (const sellerDoc of sellersSnapshot.docs) {
       const sellerData = sellerDoc.data() as Record<string, any>;
-      
-      // Update seller's item statuses first to mark expired items
+
+      const verificationStatus = sellerData.verificationStatus as
+        | string
+        | undefined;
+      if (
+        verificationStatus &&
+        verificationStatus !== "approved"
+      ) {
+        continue;
+      }
+      if (sellerData.isActive === false) {
+        continue;
+      }
+
+      const closingHourRaw = toNumber(sellerData.smartPricingClosingHour);
+      const closingHour =
+        closingHourRaw !== null && closingHourRaw >= 12 && closingHourRaw <= 23
+          ? closingHourRaw
+          : 20;
+
+      // Purge expired inventory and refresh statuses for active listings
       try {
         await inventoryService.updateItemStatuses(sellerDoc.id);
       } catch (statusError) {
@@ -174,6 +198,13 @@ export const getAvailableBags = async (userLocation: {
 
         // Only include items with stock
         if (item.quantity - (item.sold || 0) > 0) {
+          const live = computeLiveListingPrice(item, {
+            now,
+            closingHour,
+            listingId: doc.id,
+            sellerId: sellerDoc.id,
+          });
+
           const bag: AvailableBag = {
             ...item,
             id: doc.id,
@@ -183,6 +214,11 @@ export const getAvailableBags = async (userLocation: {
             rating: 4.8, // you can replace later
             latitude: sellerCoords.latitude,
             longitude: sellerCoords.longitude,
+            price: live.price,
+            discountedPrice: live.discountedPrice,
+            originalPrice: live.originalPrice,
+            smartLiveMarkdownPct: live.smartLiveMarkdownPct,
+            smartAbVariant: live.smartAbVariant,
           };
 
           allLocatedBags.push(bag);

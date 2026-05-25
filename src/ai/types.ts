@@ -147,9 +147,64 @@ export type CafeInfo = {
   cafe_name: string;
   items: string[];
   training_rows: number;
+  r2?: number;
+  cv_mae?: number;
+  model?: string;
+  model_loaded?: boolean;
+  dataset_summary?: DatasetSummary;
+  accuracy_pct?: number;
+};
+
+export type DatasetSummary = {
+  total_rows?: number;
+  total_days?: number;
+  manual_rows?: number;
+  items?: string[];
+  r2?: number;
+};
+
+export type DailySalesEntryInput = {
+  item: string;
+  sold_qty: number;
+  produced_qty?: number;
+  price?: number;
+};
+
+export type RecordDailySalesRequest = {
+  date?: string;
+  day_of_week?: DayOfWeek;
+  weather?: Weather;
+  discount_pct?: number;
+  entries: DailySalesEntryInput[];
+  retrain?: boolean;
+};
+
+export type RecordDailySalesResponse = {
+  cafe_id: string;
+  date: string;
+  saved_count: number;
+  entries: DailySalesEntryInput[];
+  dataset_summary: DatasetSummary;
+  message: string;
+  retrain?: RetrainResult;
+};
+
+export type RetrainResult = {
+  status: string;
+  rows_used: number;
   r2: number;
-  cv_mae: number;
-  model: string;
+  accuracy_pct: number;
+  mae: number;
+  items: string[];
+  top_features?: Record<string, number>;
+};
+
+export type CafeDatasetApiResponse = {
+  cafe_id: string;
+  cafe_name: string;
+  summary: DatasetSummary;
+  recent_sales: DatasetRow[];
+  items: string[];
 };
 
 export type AssessmentUpdateResponse = {

@@ -1,50 +1,93 @@
 import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
-    AvailableBag,
-    getAvailableBags,
+  AvailableBag,
+  getAvailableBags,
 } from "@/src/services/firebase/buyerInventory";
 import { addToCart } from "@/src/services/firebase/cartServices";
+import { createConversation } from "@/src/services/firebase/messagingServices";
+import {
+  BuyerProfile,
+  getUserProfile,
+} from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
+import { getPreferredLocation } from "@/src/utils/locationPreference";
+import { BUYER_ROUTES, goBackToReturn, pushWithReturn } from "@/src/utils/navigation";
+import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Heart, Lightbulb, Share2, Star, Zap } from "lucide-react-native";
+import {
+  ArrowLeft,
+  Clock,
+  Gift,
+  Heart,
+  Leaf,
+  MapPin,
+  MessageCircle,
+  Minus,
+  Plus,
+  Share2,
+  Sparkles,
+  Star,
+  X,
+  Zap,
+} from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
+const DEFAULT_LAT = 3.139;
+const DEFAULT_LNG = 101.6869;
+const IMAGE_HEIGHT = 360;
+
+function calcDiscount(original: number, discounted: number) {
+  if (original <= 0) return 0;
+  return Math.round(((original - discounted) / original) * 100);
+}
+
+function getLeftCount(item: AvailableBag) {
+  return Math.max(0, item.quantity - (item.sold || 0));
+}
+
 export default function MysteryBagDetail() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, returnTo } = useLocalSearchParams<{
+    id: string;
+    returnTo?: string;
+  }>();
   const router = useRouter();
   const { user } = useAuth();
+
+  const handleBack = () =>
+    goBackToReturn(router, returnTo, BUYER_ROUTES.home);
   const [bag, setBag] = useState<AvailableBag | null>(null);
   const [loading, setLoading] = useState(true);
   const [isFavorite, setIsFavorite] = useState(false);
   const [showQuantityModal, setShowQuantityModal] = useState(false);
   const [selectedQuantity, setSelectedQuantity] = useState(1);
   const [addingToCart, setAddingToCart] = useState(false);
+  const [contacting, setContacting] = useState(false);
 
   const loadBagDetails = useCallback(async () => {
     try {
       setLoading(true);
+      const preferred = await getPreferredLocation();
       const allBags = await getAvailableBags({
-        latitude: 3.139,
-        longitude: 101.6869,
+        latitude: preferred?.latitude ?? DEFAULT_LAT,
+        longitude: preferred?.longitude ?? DEFAULT_LNG,
       });
       const foundBag = allBags.find((b) => b.id === id);
-      if (foundBag) {
-        setBag(foundBag);
-      }
+      if (foundBag) setBag(foundBag);
     } catch (error) {
-      console.error("Error loading bag details:", error);
+      console.error("Error loading mystery bag:", error);
     } finally {
       setLoading(false);
     }
@@ -56,13 +99,12 @@ export default function MysteryBagDetail() {
 
   const handleAddToCart = async () => {
     if (!user) {
-      Alert.alert("Login Required", "Please log in to add items to cart", [
-        { text: "Cancel" },
+      Alert.alert("Login required", "Please log in to add items to your cart", [
+        { text: "Cancel", style: "cancel" },
         { text: "Login", onPress: () => router.push("/(auth)/login") },
       ]);
       return;
     }
-
     if (!bag) return;
 
     try {
@@ -76,27 +118,26 @@ export default function MysteryBagDetail() {
         originalPrice: bag.originalPrice,
         quantity: selectedQuantity,
         imageUrl: bag.imageUrl,
-        type: bag.type || "bag",
+        type: "bag",
       });
 
-      // Show success message and reset
       Alert.alert(
-        "Success",
-        `Added ${selectedQuantity} mystery bag(s) to cart`,
+        "Added to cart",
+        `${selectedQuantity} mystery bag(s) added successfully.`,
         [
           {
-            text: "Continue Shopping",
+            text: "Keep shopping",
             onPress: () => {
               setShowQuantityModal(false);
               setSelectedQuantity(1);
             },
           },
           {
-            text: "Go to Cart",
+            text: "View cart",
             onPress: () => {
               setShowQuantityModal(false);
               setSelectedQuantity(1);
-              router.push("/(buyer)/buyercart");
+              pushWithReturn(router, "/(buyer)/buyercart", BUYER_ROUTES.home);
             },
           },
         ],
@@ -109,455 +150,484 @@ export default function MysteryBagDetail() {
     }
   };
 
-  const calculateDiscount = (original: number, discounted: number) =>
-    Math.round(((original - discounted) / original) * 100);
+  const handleContact = async () => {
+    if (!user) {
+      Alert.alert("Login required", "Please log in to message the seller", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Login", onPress: () => router.push("/(auth)/login") },
+      ]);
+      return;
+    }
+    if (!bag?.sellerId) return;
 
-  const getLeftCount = (item: AvailableBag) => item.quantity - (item.sold || 0);
+    try {
+      setContacting(true);
+      let buyerName = user.displayName || "Buyer";
+      try {
+        const profile = await getUserProfile(user.uid);
+        if (profile && (profile as BuyerProfile).fullName) {
+          buyerName = (profile as BuyerProfile).fullName;
+        }
+      } catch {
+        /* use fallback name */
+      }
+
+      const convId = await createConversation(
+        user.uid,
+        buyerName,
+        bag.sellerId,
+        bag.sellerName || "Seller",
+      );
+      pushWithReturn(
+        router,
+        `/(buyer)/chat/${convId}`,
+        BUYER_ROUTES.home,
+      );
+    } catch (error) {
+      console.error("Error starting conversation:", error);
+      Alert.alert("Error", "Could not open chat with seller");
+    } finally {
+      setContacting(false);
+    }
+  };
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.backButtonText}>← Back</Text>
-          </TouchableOpacity>
+      <View style={styles.container}>
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading surprise…</Text>
         </View>
-        <ActivityIndicator
-          size="large"
-          color={colors.primary}
-          style={{ marginTop: 200 }}
-        />
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!bag) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.backButtonText}>← Back</Text>
+        <View style={styles.centered}>
+          <Gift size={40} color={colors.primary} />
+          <Text style={styles.emptyTitle}>Mystery bag not found</Text>
+          <Text style={styles.emptySub}>
+            It may have sold out. Check back for new surprises!
+          </Text>
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={handleBack}
+          >
+            <Text style={styles.primaryBtnText}>Go back</Text>
           </TouchableOpacity>
-        </View>
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>Mystery bag not found</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  const discount = calculateDiscount(
-    bag.originalPrice || bag.price,
-    bag.discountedPrice || bag.price,
-  );
+  const price = bag.discountedPrice || bag.price;
+  const original = bag.originalPrice || bag.price;
+  const worthUpTo = original * 2;
+  const discount = calcDiscount(worthUpTo, price);
   const leftCount = getLeftCount(bag);
-  const originalValue = (bag.originalPrice || bag.price) * 2; // Mystery bags typically have 2x value
+  const soldOut = leftCount === 0;
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.backButtonText}>← Back</Text>
-        </TouchableOpacity>
-        <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => setIsFavorite(!isFavorite)}
-          >
-            <Heart
-              size={24}
-              color={isFavorite ? colors.primary : colors.textSoft}
-              fill={isFavorite ? colors.primary : "none"}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.actionButton}>
-            <Share2 size={24} color={colors.textSoft} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {/* Mystery Bag Image */}
-        <View style={styles.imageContainer}>
+    <View style={styles.container}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        <View style={styles.hero}>
           {bag.imageUrl ? (
-            <Image source={{ uri: bag.imageUrl }} style={styles.image} />
+            <Image source={{ uri: bag.imageUrl }} style={styles.heroImage} />
           ) : (
-            <View style={styles.imagePlaceholder}>
-              <View style={styles.mysteryBox}>
-                <Text style={styles.mysteryIcon}>🎁</Text>
-              </View>
-            </View>
+            <LinearGradient
+              colors={[colors.primary, "#8B5A2B"]}
+              style={styles.heroGradient}
+            >
+              <Gift size={64} color="rgba(255,255,255,0.9)" />
+            </LinearGradient>
           )}
-          {/* Badge - Mystery */}
+          <LinearGradient
+            colors={["transparent", "rgba(0,0,0,0.5)"]}
+            style={styles.heroFade}
+          />
+
+          <SafeAreaView style={styles.floatingHeader}>
+            <TouchableOpacity
+              style={styles.iconBtn}
+              onPress={handleBack}
+            >
+              <ArrowLeft size={22} color={colors.white} />
+            </TouchableOpacity>
+            <View style={styles.headerActions}>
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={() => setIsFavorite(!isFavorite)}
+              >
+                <Heart
+                  size={20}
+                  color={colors.white}
+                  fill={isFavorite ? colors.white : "transparent"}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.iconBtn}>
+                <Share2 size={20} color={colors.white} />
+              </TouchableOpacity>
+            </View>
+          </SafeAreaView>
+
           <View style={styles.mysteryBadge}>
-            <Lightbulb size={16} color={colors.white} />
-            <Text style={styles.mysteryBadgeText}>Mystery Inside</Text>
+            <Sparkles size={14} color={colors.white} />
+            <Text style={styles.mysteryBadgeText}>Mystery bag</Text>
           </View>
-          {/* Limited Quantity badge */}
-          {leftCount <= 3 && leftCount > 0 && (
-            <View style={styles.urgentBadge}>
-              <Zap size={14} color={colors.white} />
-              <Text style={styles.urgentText}>Last {leftCount}!</Text>
+          {leftCount > 0 && leftCount <= 3 && (
+            <View style={styles.urgentPill}>
+              <Zap size={12} color={colors.white} />
+              <Text style={styles.urgentPillText}>Only {leftCount} left!</Text>
             </View>
           )}
         </View>
 
-        {/* Content */}
-        <View style={styles.content}>
-          {/* Excitement Section */}
-          <View style={styles.excitementCard}>
-            <Text style={styles.bagName}>{bag.name}</Text>
-            <Text style={styles.tagline}>
-              🎉 Unknown contents • {bag.category}
-            </Text>
+        <View style={styles.sheet}>
+          <View style={styles.sparkleRow}>
+            <Sparkles size={14} color={colors.primary} />
+            <Text style={styles.sparkleText}>Surprise inside</Text>
+          </View>
+          <Text style={styles.bagName}>{bag.name}</Text>
+          {bag.category ? (
+            <Text style={styles.tagline}>{bag.category} · curated surprise</Text>
+          ) : (
+            <Text style={styles.tagline}>Curated surprise from local café</Text>
+          )}
 
-            {/* Price Highlight */}
-            <View style={styles.priceHighlight}>
-              <View>
-                <Text style={styles.bargainLabel}>You Pay</Text>
-                <Text style={styles.discountedPrice}>
-                  RM {(bag.discountedPrice || bag.price).toFixed(2)}
-                </Text>
-              </View>
-              <View style={styles.priceDivider} />
-              <View>
-                <Text style={styles.bargainLabel}>Worth Up To</Text>
-                <Text style={styles.originalValuePrice}>
-                  RM {originalValue.toFixed(2)}
-                </Text>
-              </View>
+          <View style={styles.valueCard}>
+            <View style={styles.valueCol}>
+              <Text style={styles.valueLabel}>You pay</Text>
+              <Text style={styles.valuePay}>RM {price.toFixed(2)}</Text>
             </View>
-
-            {/* Savings Badge */}
-            {discount > 0 && (
-              <View style={styles.savingsBadge}>
-                <Text style={styles.savingsText}>
-                  Save up to{" "}
-                  {(
-                    ((originalValue - (bag.discountedPrice || bag.price)) /
-                      originalValue) *
-                    100
-                  ).toFixed(0)}
-                  %! 🚀
-                </Text>
-              </View>
-            )}
+            <View style={styles.valueDivider} />
+            <View style={styles.valueCol}>
+              <Text style={styles.valueLabel}>Worth up to</Text>
+              <Text style={styles.valueWorth}>RM {worthUpTo.toFixed(2)}</Text>
+            </View>
           </View>
 
-          {/* What's Inside Info */}
-          <View style={styles.infoCard}>
-            <View style={styles.infoHeader}>
-              <Lightbulb size={20} color={colors.primary} />
-              <Text style={styles.infoTitle}>What&apos;s Inside?</Text>
+          {discount > 0 && (
+            <View style={styles.saveBanner}>
+              <Leaf size={16} color={colors.success} />
+              <Text style={styles.saveBannerText}>
+                Save up to {discount}% compared to retail value
+              </Text>
             </View>
-            <Text style={styles.infoDescription}>
-              This bag contains carefully curated items from {bag.sellerName}.
-              It&apos;s a delightful surprise! 🌟
-            </Text>
-            {bag.description && (
-              <Text style={styles.infoDescriptionExtra}>{bag.description}</Text>
-            )}
+          )}
+
+          <View style={styles.whatsInside}>
+            <Gift size={20} color={colors.primary} />
+            <View style={styles.whatsInsideText}>
+              <Text style={styles.whatsInsideTitle}>What&apos;s inside?</Text>
+              <Text style={styles.whatsInsideDesc}>
+                A surprise selection from {bag.sellerName}. Contents vary each
+                time — that&apos;s part of the fun!
+              </Text>
+              {bag.description ? (
+                <Text style={styles.whatsInsideExtra}>{bag.description}</Text>
+              ) : null}
+            </View>
           </View>
 
-          {/* Quick Stats */}
-          <View style={styles.statsGrid}>
-            <View style={styles.statBox}>
-              <Text style={styles.statIcon}>⏰</Text>
+          <View style={styles.statsRow}>
+            <View style={styles.statCard}>
+              <Clock size={18} color={colors.primary} />
               <Text style={styles.statLabel}>Expires</Text>
-              <Text style={styles.statValue}>{bag.expiryDate}</Text>
+              <Text style={styles.statValue} numberOfLines={1}>
+                {bag.expiryDate}
+              </Text>
             </View>
-            <View style={styles.statBox}>
-              <Text style={styles.statIcon}>📍</Text>
+            <View style={styles.statCard}>
+              <MapPin size={18} color={colors.primary} />
               <Text style={styles.statLabel}>Distance</Text>
               <Text style={styles.statValue}>{bag.distance.toFixed(1)} km</Text>
             </View>
-            <View style={styles.statBox}>
-              <Text style={styles.statIcon}>⭐</Text>
+            <View style={styles.statCard}>
+              <Star size={18} color="#FFC107" fill="#FFC107" />
               <Text style={styles.statLabel}>Rating</Text>
               <Text style={styles.statValue}>{bag.rating.toFixed(1)}</Text>
             </View>
           </View>
 
-          {/* Seller Info */}
-          <View style={styles.sellerSection}>
-            <Text style={styles.sectionTitle}>From This Seller</Text>
-            <View style={styles.sellerCard}>
-              <View style={styles.sellerAvatar}>
-                <Text style={styles.sellerInitial}>
-                  {bag.sellerName.charAt(0).toUpperCase()}
-                </Text>
-              </View>
-              <View style={styles.sellerInfo}>
-                <Text style={styles.sellerName}>{bag.sellerName}</Text>
-                <View style={styles.sellerRating}>
-                  <Star size={12} color="#FFC107" fill="#FFC107" />
-                  <Text style={styles.sellerRatingText}>
-                    {bag.rating.toFixed(1)} (
-                    {Math.floor(Math.random() * 100) + 10} reviews)
-                  </Text>
-                </View>
-              </View>
-              <TouchableOpacity style={styles.messageButton}>
-                <Text style={styles.messageButtonText}>Message</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Why Choose Mystery Bags */}
-          <View style={styles.benefitsCard}>
-            <Text style={styles.sectionTitle}>Why Mystery Bags?</Text>
-            <View style={styles.benefitRow}>
-              <Text style={styles.benefitIcon}>💚</Text>
-              <Text style={styles.benefitText}>Help reduce food waste</Text>
-            </View>
-            <View style={styles.benefitRow}>
-              <Text style={styles.benefitIcon}>💰</Text>
-              <Text style={styles.benefitText}>
-                Save up to 70% on food costs
+          <View style={styles.sellerCard}>
+            <View style={styles.sellerAvatar}>
+              <Text style={styles.sellerInitial}>
+                {bag.sellerName.charAt(0).toUpperCase()}
               </Text>
             </View>
-            <View style={styles.benefitRow}>
-              <Text style={styles.benefitIcon}>🎉</Text>
-              <Text style={styles.benefitText}>Every bag is a surprise!</Text>
+            <View style={styles.sellerInfo}>
+              <Text style={styles.sellerLabel}>From</Text>
+              <Text style={styles.sellerName}>{bag.sellerName}</Text>
             </View>
-            <View style={styles.benefitRow}>
-              <Text style={styles.benefitIcon}>⚡</Text>
-              <Text style={styles.benefitText}>Support local businesses</Text>
-            </View>
-          </View>
-
-          {/* Availability */}
-          <View style={styles.availabilityCard}>
-            {leftCount > 0 ? (
-              <>
-                <Text style={styles.availabilityText}>
-                  Only {leftCount} bag{leftCount > 1 ? "s" : ""} left!
-                </Text>
-                <Text style={styles.availabilitySubtext}>
-                  Act fast before they&apos;re gone
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={styles.soldOutText}>Sold Out</Text>
-                <Text style={styles.availabilitySubtext}>
-                  Check back soon for more surprises!
-                </Text>
-              </>
-            )}
-          </View>
-
-          {/* CTA Buttons */}
-          <View style={styles.ctaContainer}>
             <TouchableOpacity
-              style={[
-                styles.addToCartButton,
-                leftCount === 0 && styles.addToCartButtonDisabled,
-              ]}
-              disabled={leftCount === 0 || addingToCart}
-              onPress={() => setShowQuantityModal(true)}
+              style={styles.messageBtn}
+              onPress={handleContact}
+              disabled={contacting}
             >
-              <Text style={styles.addToCartText}>
-                {leftCount === 0
-                  ? "Sold Out"
-                  : addingToCart
-                    ? "Adding..."
-                    : "Grab This Mystery Bag! 🎁"}
+              <MessageCircle size={16} color={colors.primary} />
+              <Text style={styles.messageBtnText}>
+                {contacting ? "…" : "Chat"}
               </Text>
             </TouchableOpacity>
           </View>
 
-          <View style={{ height: 40 }} />
+          <Text style={styles.sectionTitle}>Why mystery bags?</Text>
+          <View style={styles.benefitsCard}>
+            {[
+              "Rescue surplus food before it goes to waste",
+              "Save up to 70% compared to regular prices",
+              "Every bag is a unique surprise",
+              "Support local cafés and bakeries",
+            ].map((line) => (
+              <View key={line} style={styles.benefitRow}>
+                <View style={styles.benefitDot} />
+                <Text style={styles.benefitText}>{line}</Text>
+              </View>
+            ))}
+          </View>
+
+          {!soldOut && (
+            <View style={styles.urgencyCard}>
+              <Zap size={18} color="#E67E22" />
+              <View style={styles.urgencyText}>
+                <Text style={styles.urgencyTitle}>
+                  {leftCount} bag{leftCount > 1 ? "s" : ""} remaining
+                </Text>
+                <Text style={styles.urgencySub}>Grab yours before they&apos;re gone</Text>
+              </View>
+            </View>
+          )}
+
+          <View style={{ height: 100 }} />
         </View>
       </ScrollView>
 
-      {/* Quantity Modal */}
+      <SafeAreaView style={styles.footer}>
+        <View style={styles.footerInner}>
+          <View>
+            <Text style={styles.footerLabel}>From</Text>
+            <Text style={styles.footerPrice}>RM {price.toFixed(2)}</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.grabBtn, soldOut && styles.grabBtnDisabled]}
+            disabled={soldOut || addingToCart}
+            onPress={() => setShowQuantityModal(true)}
+            activeOpacity={0.9}
+          >
+            <Gift size={20} color={colors.white} />
+            <Text style={styles.grabBtnText}>
+              {soldOut ? "Sold out" : "Grab mystery bag"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+
       <Modal
         visible={showQuantityModal}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setShowQuantityModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => setShowQuantityModal(false)}
+        >
+          <Pressable style={styles.modalSheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>How Many Bags?</Text>
+              <Text style={styles.modalTitle}>How many bags?</Text>
               <TouchableOpacity onPress={() => setShowQuantityModal(false)}>
-                <Text style={styles.modalClose}>✕</Text>
+                <X size={22} color={colors.textSoft} />
               </TouchableOpacity>
             </View>
 
-            <View style={styles.quantitySelectorSection}>
-              <View style={styles.quantityControlLarge}>
-                <TouchableOpacity
-                  disabled={selectedQuantity <= 1}
-                  onPress={() =>
-                    setSelectedQuantity(Math.max(1, selectedQuantity - 1))
-                  }
-                  style={styles.quantityButtonLarge}
-                >
-                  <Text style={styles.quantityButtonText}>−</Text>
-                </TouchableOpacity>
-                <Text style={styles.quantityDisplayLarge}>
-                  {selectedQuantity}
-                </Text>
-                <TouchableOpacity
-                  disabled={selectedQuantity >= leftCount}
-                  onPress={() =>
-                    setSelectedQuantity(
-                      Math.min(leftCount, selectedQuantity + 1),
-                    )
-                  }
-                  style={styles.quantityButtonLarge}
-                >
-                  <Text style={styles.quantityButtonText}>+</Text>
-                </TouchableOpacity>
-              </View>
+            <Text style={styles.modalItemName} numberOfLines={2}>
+              {bag.name}
+            </Text>
+            <Text style={styles.modalPrice}>RM {price.toFixed(2)} each</Text>
 
-              <Text style={styles.availableText}>
-                {leftCount} bags available
+            <View style={styles.qtyRow}>
+              <TouchableOpacity
+                style={[
+                  styles.qtyBtn,
+                  selectedQuantity <= 1 && styles.qtyBtnDisabled,
+                ]}
+                disabled={selectedQuantity <= 1}
+                onPress={() =>
+                  setSelectedQuantity(Math.max(1, selectedQuantity - 1))
+                }
+              >
+                <Minus size={20} color={colors.primary} />
+              </TouchableOpacity>
+              <Text style={styles.qtyValue}>{selectedQuantity}</Text>
+              <TouchableOpacity
+                style={[
+                  styles.qtyBtn,
+                  selectedQuantity >= leftCount && styles.qtyBtnDisabled,
+                ]}
+                disabled={selectedQuantity >= leftCount}
+                onPress={() =>
+                  setSelectedQuantity(
+                    Math.min(leftCount, selectedQuantity + 1),
+                  )
+                }
+              >
+                <Plus size={20} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.qtyHint}>{leftCount} bags available</Text>
+
+            <View style={styles.modalTotalRow}>
+              <Text style={styles.modalTotalLabel}>Subtotal</Text>
+              <Text style={styles.modalTotalValue}>
+                RM {(price * selectedQuantity).toFixed(2)}
               </Text>
             </View>
 
             <TouchableOpacity
-              style={styles.modalAddButton}
+              style={styles.modalAddBtn}
               disabled={addingToCart}
               onPress={handleAddToCart}
             >
-              <Text style={styles.modalAddButtonText}>
-                {addingToCart ? "Adding..." : "Add to Cart"}
+              <Text style={styles.modalAddBtnText}>
+                {addingToCart ? "Adding…" : "Add to cart"}
               </Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.modalCancelButton}
-              disabled={addingToCart}
-              onPress={() => setShowQuantityModal(false)}
-            >
-              <Text style={styles.modalCancelButtonText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: colors.background },
+  centered: {
     flex: 1,
-    backgroundColor: colors.background,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.xl,
+    gap: spacing.md,
   },
-  header: {
+  loadingText: { fontSize: 14, color: colors.textSoft },
+  emptyTitle: { fontSize: 20, fontWeight: "800", color: colors.text },
+  emptySub: {
+    fontSize: 14,
+    color: colors.textSoft,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  primaryBtn: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: 14,
+    marginTop: spacing.sm,
+  },
+  primaryBtnText: { fontSize: 15, fontWeight: "800", color: colors.white },
+  scrollContent: { paddingBottom: 0 },
+  hero: {
+    height: IMAGE_HEIGHT,
+    backgroundColor: colors.primarySoft,
+    position: "relative",
+  },
+  heroImage: { width: "100%", height: "100%" },
+  heroGradient: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroFade: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  floatingHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingTop: spacing.sm,
+    zIndex: 2,
   },
-  headerActions: {
-    flexDirection: "row",
-    gap: spacing.md,
-  },
-  backButtonText: {
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  actionButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.white,
-    justifyContent: "center",
+  headerActions: { flexDirection: "row", gap: spacing.sm },
+  iconBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "rgba(0,0,0,0.35)",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  imageContainer: {
-    width: "100%",
-    height: 350,
-    position: "relative",
-    backgroundColor: colors.primarySoft,
-  },
-  image: {
-    width: "100%",
-    height: "100%",
-  },
-  imagePlaceholder: {
-    width: "100%",
-    height: "100%",
-    backgroundColor: colors.primarySoft,
     justifyContent: "center",
-    alignItems: "center",
-  },
-  mysteryBox: {
-    width: 120,
-    height: 120,
-    backgroundColor: colors.primary,
-    borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  mysteryIcon: {
-    fontSize: 60,
   },
   mysteryBadge: {
     position: "absolute",
-    top: spacing.lg,
-    right: spacing.lg,
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 8,
+    bottom: 36,
+    left: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 2,
   },
   mysteryBadgeText: {
-    color: colors.white,
-    fontWeight: "700",
     fontSize: 13,
+    fontWeight: "800",
+    color: colors.white,
   },
-  urgentBadge: {
+  urgentPill: {
     position: "absolute",
-    top: spacing.lg,
-    left: spacing.lg,
-    backgroundColor: "#FF6B6B",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 8,
+    bottom: 36,
+    right: spacing.lg,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    backgroundColor: "#E53935",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    zIndex: 2,
   },
-  urgentText: {
-    color: colors.white,
-    fontWeight: "700",
+  urgentPillText: {
     fontSize: 12,
+    fontWeight: "800",
+    color: colors.white,
   },
-  content: {
+  sheet: {
+    marginTop: -24,
+    backgroundColor: colors.background,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    paddingTop: spacing.lg,
   },
-  excitementCard: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
-    borderWidth: 2,
-    borderColor: colors.primary,
+  sparkleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: spacing.sm,
+  },
+  sparkleText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.primary,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   bagName: {
     fontSize: 26,
-    fontWeight: "700",
+    fontWeight: "800",
     color: colors.text,
+    lineHeight: 32,
     marginBottom: 4,
   },
   tagline: {
@@ -565,333 +635,325 @@ const styles = StyleSheet.create({
     color: colors.textSoft,
     marginBottom: spacing.lg,
   },
-  priceHighlight: {
+  valueCard: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-    backgroundColor: colors.background,
-    borderRadius: 10,
-    paddingVertical: spacing.lg,
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.lg,
     marginBottom: spacing.md,
+    borderWidth: 2,
+    borderColor: colors.primary,
   },
-  bargainLabel: {
-    fontSize: 12,
-    color: colors.textSoft,
-    marginBottom: 4,
-  },
-  discountedPrice: {
+  valueCol: { flex: 1, alignItems: "center" },
+  valueLabel: { fontSize: 12, color: colors.textSoft, marginBottom: 4 },
+  valuePay: {
     fontSize: 24,
-    fontWeight: "700",
+    fontWeight: "800",
     color: colors.primary,
   },
-  originalValuePrice: {
+  valueWorth: {
     fontSize: 24,
-    fontWeight: "700",
+    fontWeight: "800",
     color: colors.success,
   },
-  priceDivider: {
+  valueDivider: {
     width: 1,
-    height: 40,
     backgroundColor: colors.border,
+    marginHorizontal: spacing.sm,
   },
-  savingsBadge: {
-    backgroundColor: "#FFE0E0",
-    borderRadius: 8,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  savingsText: {
-    color: "#C92A1E",
-    fontWeight: "600",
-    fontSize: 13,
-    textAlign: "center",
-  },
-  infoCard: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  infoHeader: {
+  saveBanner: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.text,
-  },
-  infoDescription: {
-    fontSize: 14,
-    color: colors.text,
-    lineHeight: 20,
-    marginBottom: spacing.sm,
-  },
-  infoDescriptionExtra: {
-    fontSize: 13,
-    color: colors.textSoft,
-    lineHeight: 18,
-    marginTop: spacing.sm,
-  },
-  statsGrid: {
-    flexDirection: "row",
-    gap: spacing.md,
+    backgroundColor: colors.successSoft,
+    padding: spacing.md,
+    borderRadius: 12,
     marginBottom: spacing.lg,
   },
-  statBox: {
+  saveBannerText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.success,
+    flex: 1,
+  },
+  whatsInside: {
+    flexDirection: "row",
+    gap: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  whatsInsideText: { flex: 1 },
+  whatsInsideTitle: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.text,
+    marginBottom: 6,
+  },
+  whatsInsideDesc: {
+    fontSize: 14,
+    color: colors.text,
+    lineHeight: 21,
+  },
+  whatsInsideExtra: {
+    fontSize: 13,
+    color: colors.textSoft,
+    marginTop: spacing.sm,
+    lineHeight: 19,
+  },
+  statsRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  statCard: {
     flex: 1,
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 14,
     padding: spacing.md,
     alignItems: "center",
     borderWidth: 1,
     borderColor: colors.border,
+    gap: 4,
   },
-  statIcon: {
-    fontSize: 24,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: colors.textSoft,
-    marginBottom: 2,
-  },
+  statLabel: { fontSize: 11, color: colors.textSoft },
   statValue: {
-    fontSize: 13,
-    fontWeight: "700",
+    fontSize: 12,
+    fontWeight: "800",
     color: colors.text,
     textAlign: "center",
   },
-  sellerSection: {
-    marginBottom: spacing.lg,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
   sellerCard: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
+    gap: spacing.md,
   },
   sellerAvatar: {
     width: 48,
     height: 48,
     borderRadius: 24,
     backgroundColor: colors.primarySoft,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
   },
   sellerInitial: {
     fontSize: 18,
-    fontWeight: "700",
+    fontWeight: "800",
     color: colors.primary,
   },
-  sellerInfo: {
-    flex: 1,
-  },
+  sellerInfo: { flex: 1 },
+  sellerLabel: { fontSize: 11, color: colors.textSoft },
   sellerName: {
-    fontSize: 14,
-    fontWeight: "600",
+    fontSize: 15,
+    fontWeight: "800",
     color: colors.text,
-    marginBottom: 4,
+    marginTop: 2,
   },
-  sellerRating: {
+  messageBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-  },
-  sellerRatingText: {
-    fontSize: 12,
-    color: colors.textSoft,
-  },
-  messageButton: {
+    gap: 6,
     backgroundColor: colors.primarySoft,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
   },
-  messageButtonText: {
+  messageBtnText: {
+    fontSize: 13,
+    fontWeight: "800",
     color: colors.primary,
-    fontWeight: "600",
-    fontSize: 12,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: colors.text,
+    marginBottom: spacing.sm,
   },
   benefitsCard: {
     backgroundColor: colors.white,
-    borderRadius: 12,
+    borderRadius: 16,
     padding: spacing.md,
     marginBottom: spacing.lg,
     borderWidth: 1,
     borderColor: colors.border,
+    gap: spacing.sm,
   },
   benefitRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    paddingVertical: spacing.sm,
+    gap: spacing.sm,
   },
-  benefitIcon: {
-    fontSize: 18,
+  benefitDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.primary,
   },
   benefitText: {
-    fontSize: 13,
+    fontSize: 14,
     color: colors.text,
     flex: 1,
   },
-  availabilityCard: {
-    backgroundColor: "#FFF3E0",
-    borderRadius: 12,
-    padding: spacing.lg,
+  urgencyCard: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: spacing.md,
+    backgroundColor: "#FFF8E1",
+    borderRadius: 14,
+    padding: spacing.md,
     marginBottom: spacing.lg,
     borderWidth: 1,
-    borderColor: "#FFC107",
+    borderColor: "#FFE082",
   },
-  availabilityText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#E67E22",
-    marginBottom: 4,
-  },
-  soldOutText: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.textSoft,
-    marginBottom: 4,
-  },
-  availabilitySubtext: {
-    fontSize: 12,
+  urgencyText: { flex: 1 },
+  urgencyTitle: {
+    fontSize: 15,
+    fontWeight: "800",
     color: "#E67E22",
   },
-  ctaContainer: {
-    gap: spacing.md,
+  urgencySub: { fontSize: 12, color: "#F57C00", marginTop: 2 },
+  footer: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.white,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 10,
   },
-  addToCartButton: {
+  footerInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  footerLabel: { fontSize: 12, color: colors.textSoft },
+  footerPrice: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  grabBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
     backgroundColor: colors.primary,
-    borderRadius: 12,
-    paddingVertical: spacing.lg,
-    justifyContent: "center",
-    alignItems: "center",
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+    borderRadius: 14,
   },
-  addToCartButtonDisabled: {
-    backgroundColor: colors.textSoft,
-    opacity: 0.5,
-  },
-  addToCartText: {
+  grabBtnDisabled: { opacity: 0.5 },
+  grabBtnText: {
+    fontSize: 15,
+    fontWeight: "800",
     color: colors.white,
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  emptyState: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  emptyText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.text,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0,0,0,0.45)",
     justifyContent: "flex-end",
   },
-  modalContent: {
+  modalSheet: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
     paddingBottom: spacing.xl,
+    paddingTop: spacing.sm,
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    alignSelf: "center",
+    marginBottom: spacing.md,
   },
   modalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: spacing.lg,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: colors.text,
-  },
-  modalClose: {
-    fontSize: 24,
-    color: colors.textSoft,
-  },
-  quantitySelectorSection: {
-    alignItems: "center",
-    marginBottom: spacing.xl,
-  },
-  quantityControlLarge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.lg,
     marginBottom: spacing.md,
   },
-  quantityButtonLarge: {
+  modalTitle: { fontSize: 18, fontWeight: "800", color: colors.text },
+  modalItemName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 4,
+  },
+  modalPrice: {
+    fontSize: 13,
+    color: colors.textSoft,
+    marginBottom: spacing.lg,
+  },
+  qtyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.xl,
+    marginBottom: spacing.sm,
+  },
+  qtyBtn: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: colors.background,
-    justifyContent: "center",
+    backgroundColor: colors.primarySoft,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
+    justifyContent: "center",
   },
-  quantityButtonText: {
-    fontSize: 24,
-    fontWeight: "600",
-    color: colors.primary,
-  },
-  quantityDisplayLarge: {
-    fontSize: 28,
-    fontWeight: "700",
+  qtyBtnDisabled: { opacity: 0.4 },
+  qtyValue: {
+    fontSize: 32,
+    fontWeight: "800",
     color: colors.text,
-    minWidth: 50,
+    minWidth: 48,
     textAlign: "center",
   },
-  availableText: {
+  qtyHint: {
     fontSize: 13,
     color: colors.textSoft,
+    textAlign: "center",
+    marginBottom: spacing.lg,
   },
-  modalAddButton: {
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    paddingVertical: spacing.lg,
-    justifyContent: "center",
-    alignItems: "center",
+  modalTotalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     marginBottom: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  modalAddButtonText: {
-    color: colors.white,
-    fontSize: 16,
-    fontWeight: "700",
+  modalTotalLabel: { fontSize: 14, color: colors.textSoft },
+  modalTotalValue: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: colors.primary,
   },
-  modalCancelButton: {
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    paddingVertical: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    justifyContent: "center",
+  modalAddBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: 14,
+    paddingVertical: 16,
     alignItems: "center",
   },
-  modalCancelButtonText: {
-    color: colors.text,
+  modalAddBtnText: {
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "800",
+    color: colors.white,
   },
 });

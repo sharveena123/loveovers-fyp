@@ -2,18 +2,15 @@ import InputField from "@/src/components/InputField";
 import PrimaryButton from "@/src/components/PrimaryButton";
 import { Text } from "@/src/components/StyledText";
 import { auth } from "@/src/services/firebase/config";
-import {
-  createBuyerProfile,
-  createSellerProfile,
-} from "@/src/services/firebase/user";
-import { colors } from "@/src/theme/styles";
+import { createBuyerProfile } from "@/src/services/firebase/user";
+import { colors, spacing } from "@/src/theme/styles";
 import { router } from "expo-router";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import {
+  ChevronLeft,
   Eye,
   Lock,
   Mail,
-  MapPin,
   Phone,
   ShoppingBag,
   User,
@@ -42,25 +39,14 @@ export default function RegisterScreen() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const handleRegister = async () => {
-    // Validation
     if (userType === "seller") {
-      if (
-        !contactName ||
-        !businessName ||
-        !email ||
-        !phone ||
-        !businessAddress ||
-        !password ||
-        !confirmPassword
-      ) {
-        Alert.alert("Error", "Please fill in all fields");
-        return;
-      }
-    } else {
-      if (!contactName || !email || !phone || !password || !confirmPassword) {
-        Alert.alert("Error", "Please fill in all fields");
-        return;
-      }
+      router.push("/(auth)/seller-register");
+      return;
+    }
+
+    if (!contactName || !email || !phone || !password || !confirmPassword) {
+      Alert.alert("Error", "Please fill in all fields");
+      return;
     }
 
     if (!email.includes("@")) {
@@ -88,31 +74,12 @@ export default function RegisterScreen() {
       );
       const user = userCredential.user;
 
-      // Create user profile in Firestore
-      if (userType === "seller") {
-        await createSellerProfile(
-          user.uid,
-          email,
-          contactName,
-          businessName,
-          phone,
-          businessAddress
-        );
-      } else {
-        await createBuyerProfile(user.uid, email, contactName, phone);
-      }
+      await createBuyerProfile(user.uid, email, contactName, phone);
 
       Alert.alert("Success", "Account created successfully!", [
         {
           text: "OK",
-          onPress: () => {
-            // Route based on role
-            if (userType === "seller") {
-              router.replace("/(seller)/dashboard");
-            } else {
-              router.replace("/(buyer)/buyerhome");
-            }
-          },
+          onPress: () => router.replace("/(buyer)/buyerhome"),
         },
       ]);
     } catch (error: any) {
@@ -146,7 +113,15 @@ export default function RegisterScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.container}>
-          {/* Header */}
+          <TouchableOpacity
+            style={styles.backLink}
+            onPress={() => router.replace("/")}
+            activeOpacity={0.8}
+          >
+            <ChevronLeft size={20} color={colors.primary} />
+            <Text style={styles.backLinkText}>Back</Text>
+          </TouchableOpacity>
+
           <Text style={styles.title}>Create Account</Text>
           <Text style={styles.subtitle}>Join the fight against food waste</Text>
 
@@ -207,21 +182,14 @@ export default function RegisterScreen() {
               </View>
             </View>
 
-            {/* Business Name - Only for Seller */}
             {userType === "seller" && (
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Business Name</Text>
-                <View style={styles.inputWrapper}>
-                  <View style={styles.iconContainer}>
-                    <ShoppingBag size={20} color={colors.textSoft} />
-                  </View>
-                  <InputField
-                    value={businessName}
-                    onChangeText={setBusinessName}
-                    placeholder="Your Cafe/Bakery Name"
-                    style={styles.inputWithIcon}
-                  />
-                </View>
+              <View style={styles.sellerBanner}>
+                <ShoppingBag size={22} color={colors.primary} />
+                <Text style={styles.sellerBannerText}>
+                  Sellers complete a 3-step registration with business or manual
+                  verification, photo uploads, and admin review for home-based
+                  businesses.
+                </Text>
               </View>
             )}
 
@@ -258,24 +226,6 @@ export default function RegisterScreen() {
                 />
               </View>
             </View>
-
-            {/* Business Address - Only for Seller */}
-            {userType === "seller" && (
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Business Address</Text>
-                <View style={styles.inputWrapper}>
-                  <View style={styles.iconContainer}>
-                    <MapPin size={20} color={colors.textSoft} />
-                  </View>
-                  <InputField
-                    value={businessAddress}
-                    onChangeText={setBusinessAddress}
-                    placeholder="123, Bukit Bintang, Kuala Lumpur"
-                    style={styles.inputWithIcon}
-                  />
-                </View>
-              </View>
-            )}
 
             {/* Password */}
             <View style={styles.inputContainer}>
@@ -333,31 +283,16 @@ export default function RegisterScreen() {
             </Text>
 
             <PrimaryButton
-              title={loading ? "Creating Account..." : "Create Account"}
+              title={
+                loading
+                  ? "Creating Account..."
+                  : userType === "seller"
+                    ? "Continue to seller registration"
+                    : "Create Account"
+              }
               onPress={handleRegister}
               disabled={loading}
-              style={styles.signInButton}
             />
-
-            {/* Divider */}
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>OR</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            {/* Social Buttons */}
-            <TouchableOpacity style={styles.socialButton}>
-              <Text style={styles.socialButtonText}>G</Text>
-              <Text style={styles.socialButtonLabel}>Sign up with Google</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.socialButton}>
-              <Text style={styles.socialButtonText}>f</Text>
-              <Text style={styles.socialButtonLabel}>
-                Sign up with Facebook
-              </Text>
-            </TouchableOpacity>
           </View>
 
           {/* Footer */}
@@ -386,6 +321,18 @@ const styles = StyleSheet.create({
   container: {
     width: "100%",
     alignItems: "center",
+  },
+  backLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    marginBottom: 16,
+    gap: 4,
+  },
+  backLinkText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.primary,
   },
   title: {
     fontSize: 32,
@@ -468,6 +415,21 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: "600",
   },
+  sellerBanner: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    backgroundColor: colors.primarySoft,
+    padding: spacing.md,
+    borderRadius: 10,
+    marginBottom: spacing.md,
+    alignItems: "flex-start",
+  },
+  sellerBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.text,
+    lineHeight: 18,
+  },
   terms: {
     fontSize: 12,
     color: colors.textSoft,
@@ -476,42 +438,6 @@ const styles = StyleSheet.create({
   termsLink: {
     color: colors.primary,
     fontWeight: "600",
-  },
-  signInButton: {
-    marginBottom: 24,
-  },
-  divider: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  dividerText: {
-    marginHorizontal: 16,
-    color: colors.textSoft,
-    fontSize: 14,
-  },
-  socialButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingVertical: 12,
-    marginBottom: 12,
-  },
-  socialButtonText: {
-    fontSize: 20,
-    fontWeight: "600",
-    marginRight: 12,
-  },
-  socialButtonLabel: {
-    fontSize: 14,
   },
   footer: {
     flexDirection: "row",

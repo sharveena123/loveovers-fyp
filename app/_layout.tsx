@@ -24,10 +24,10 @@ export default function RootLayout() {
     <ThemeProvider>
       <StripeProvider publishableKey={STRIPE_PUBLISHABLE_KEY}>
         <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="index" />
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(seller)" />
           <Stack.Screen name="(buyer)" />
-          <Stack.Screen name="index" />
         </Stack>
       </StripeProvider>
     </ThemeProvider>
