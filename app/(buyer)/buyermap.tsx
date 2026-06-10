@@ -5,6 +5,7 @@ import {
 } from "@/src/services/firebase/buyerInventory";
 import { colors, spacing } from "@/src/theme/styles";
 import { getPreferredLocation } from "@/src/utils/locationPreference";
+import { resolveBuyerPriceDisplay } from "@/src/utils/listingPrices";
 import * as Location from "expo-location";
 import { BUYER_ROUTES, pushWithReturn } from "@/src/utils/navigation";
 import { router } from "expo-router";
@@ -45,12 +46,11 @@ type ShopOnMap = {
   categories: string[];
 };
 
-const getDiscountPct = (bag: AvailableBag) => {
-  const original = bag.originalPrice || bag.price;
-  const discounted = bag.discountedPrice || bag.price;
-  if (original <= 0) return 0;
-  return Math.round(((original - discounted) / original) * 100);
-};
+const getBagPrice = (bag: AvailableBag) =>
+  resolveBuyerPriceDisplay(bag).salePrice;
+
+const getDiscountPct = (bag: AvailableBag) =>
+  resolveBuyerPriceDisplay(bag).discountPct;
 
 function groupBagsIntoShops(bags: AvailableBag[]): ShopOnMap[] {
   const bySeller = new Map<string, AvailableBag[]>();
@@ -82,7 +82,7 @@ function groupBagsIntoShops(bags: AvailableBag[]): ShopOnMap[] {
       distance: first.distance,
       items: sorted,
       listingCount: sorted.length,
-      minPrice: Math.min(...sorted.map((i) => i.discountedPrice || i.price)),
+      minPrice: Math.min(...sorted.map((i) => getBagPrice(i))),
       maxDiscount: Math.max(...discounts, 0),
       imageUrl: withImage?.imageUrl,
       categories,
@@ -398,7 +398,7 @@ export default function BuyerMap() {
                   </View>
                   <View style={styles.previewItemRight}>
                     <Text style={styles.previewItemPrice}>
-                      RM {(item.discountedPrice || item.price).toFixed(2)}
+                      RM {getBagPrice(item).toFixed(2)}
                     </Text>
                     {discount > 0 && (
                       <Text style={styles.previewItemDiscount}>

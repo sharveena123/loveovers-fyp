@@ -1,6 +1,8 @@
 import { PredictionScreen } from "@/src/components/dashboard/PredictionScreen";
 import { UploadAndTrainScreen } from "@/src/components/dashboard/UploadScreen";
+import { SmartRemindersStrip } from "@/src/components/SmartRemindersStrip";
 import { Text } from "@/src/components/StyledText";
+import { useSmartReminders } from "@/src/hooks/useSmartReminders";
 import {
   DashboardStats,
   getDashboardStats,
@@ -258,6 +260,17 @@ export default function OwnerDashboard() {
   const displayedListings =
     listingsTab === "bag" ? activeBags : activeItems;
 
+  const {
+    reminders: smartReminders,
+    dismissReminder,
+    refreshReminders,
+  } = useSmartReminders({
+    role: "seller",
+    userId: auth.currentUser?.uid,
+    inventory,
+    itemsExpiring: stats.itemsExpiring,
+  });
+
   const fetchDashboardData = useCallback(async (sellerId: string, silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -321,8 +334,9 @@ export default function OwnerDashboard() {
     useCallback(() => {
       if (auth.currentUser) {
         fetchDashboardData(auth.currentUser.uid, true);
+        refreshReminders();
       }
-    }, [fetchDashboardData]),
+    }, [fetchDashboardData, refreshReminders]),
   );
 
   useEffect(() => {
@@ -334,9 +348,10 @@ export default function OwnerDashboard() {
     setRefreshing(true);
     if (auth.currentUser) {
       await fetchDashboardData(auth.currentUser.uid);
+      await refreshReminders();
     }
     setRefreshing(false);
-  }, [fetchDashboardData]);
+  }, [fetchDashboardData, refreshReminders]);
 
   const handleTrainingComplete = useCallback(async (cafeId: string) => {
     setTrainedCafeId(cafeId);
@@ -376,19 +391,28 @@ export default function OwnerDashboard() {
       >
         <View style={styles.header}>
           <View style={styles.headerDecor} />
-          <View style={styles.headerContent}>
-            <View style={styles.greetingRow}>
-              <Sparkles size={16} color="rgba(255,255,255,0.9)" />
-              <Text style={styles.greeting}>{getGreeting()}</Text>
+          <View style={styles.headerTopRow}>
+            <View style={styles.headerContent}>
+              <View style={styles.greetingRow}>
+                <Sparkles size={16} color="rgba(255,255,255,0.9)" />
+                <Text style={styles.greeting}>{getGreeting()}</Text>
+              </View>
+              <Text style={styles.shopName}>{sellerProfile.businessName}</Text>
+              <Text style={styles.headerSubtitle}>
+                Here&apos;s how your shop is doing today
+              </Text>
             </View>
-            <Text style={styles.shopName}>{sellerProfile.businessName}</Text>
-            <Text style={styles.headerSubtitle}>
-              Here&apos;s how your shop is doing today
-            </Text>
           </View>
         </View>
 
         <View style={styles.body}>
+          <SmartRemindersStrip
+            reminders={smartReminders}
+            onDismiss={dismissReminder}
+            title="Shop reminders"
+            embedded
+          />
+
           <View style={styles.revenueCard}>
             <View style={styles.revenueLeft}>
               <View style={styles.revenueIconWrap}>
@@ -581,10 +605,10 @@ export default function OwnerDashboard() {
 
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>AI predictions</Text>
+              <Text style={styles.sectionTitle}>Bake planner</Text>
               <View style={styles.aiBadge}>
                 <Sparkles size={12} color={colors.primary} />
-                <Text style={styles.aiBadgeText}>Smart</Text>
+                <Text style={styles.aiBadgeText}>Guide</Text>
               </View>
             </View>
             <View style={styles.aiSection}>
@@ -647,8 +671,15 @@ const styles = StyleSheet.create({
     borderRadius: 70,
     backgroundColor: "rgba(255,255,255,0.08)",
   },
-  headerContent: {
+  headerTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
     zIndex: 1,
+  },
+  headerContent: {
+    flex: 1,
+    paddingRight: spacing.sm,
   },
   greetingRow: {
     flexDirection: "row",

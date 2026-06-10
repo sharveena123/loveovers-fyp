@@ -1,12 +1,19 @@
+import { classifyFoodImage, CLASSIFY_FOOD_URL } from "@/src/ai/api";
 import { Text, TextInput } from "@/src/components/StyledText";
+import { FormSubmitError, FieldError } from "@/src/components/FieldError";
 import {
   inventoryService,
   ItemCategory,
 } from "@/src/services/firebase/inventoryServices";
 import { colors, spacing } from "@/src/theme/styles";
+import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
+import {
+  foodLabelToItemName,
+  formatFoodLabel,
+} from "@/src/utils/foodClassification";
 import { ExpiryPickerFields } from "@/src/components/dashboard/ExpiryPickerFields";
 import * as ImagePicker from "expo-image-picker";
-import { getDownloadURL, getStorage, ref, uploadBytes } from "firebase/storage";
+import { uploadImageFromUri } from "@/src/services/firebase/storageUpload";
 import { computeInitialListingAnchor } from "@/src/services/pricing/dynamicPricing";
 import {
   combineExpiryAt,
@@ -22,7 +29,7 @@ import {
   Upload,
   X,
 } from "lucide-react-native";
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -71,7 +78,20 @@ export function AddItemModal({
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [classifying, setClassifying] = useState(false);
+  const [aiSuggested, setAiSuggested] = useState(false);
+  const [classificationConfidence, setClassificationConfidence] = useState<
+    number | null
+  >(null);
+  const [classificationNotice, setClassificationNotice] = useState<
+    string | null
+  >(null);
+  const [nameSuggestion, setNameSuggestion] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
+
+  /** Bumps on each new photo so slower classify responses cannot overwrite a newer pick. */
+  const classifyGenerationRef = useRef(0);
 
   const expiryAt = useMemo(
     () => combineExpiryAt(expiryDate, expiryTime),
@@ -85,6 +105,7 @@ export function AddItemModal({
   }, [retailPrice, useSmartPricing, expiryAt]);
 
   const resetForm = () => {
+    classifyGenerationRef.current += 1;
     setName("");
     setCategory("Bakery");
     setQuantity("1");
@@ -94,6 +115,103 @@ export function AddItemModal({
     setExpiryDate(new Date());
     setExpiryTime(new Date());
     setImageUri(null);
+    setClassifying(false);
+    setAiSuggested(false);
+    setClassificationConfidence(null);
+    setClassificationNotice(null);
+    setNameSuggestion(null);
+    setErrors({});
+  };
+
+  const clearAiSuggestionFields = () => {
+    setName("");
+    setCategory("Bakery");
+    setAiSuggested(false);
+    setClassificationConfidence(null);
+    setNameSuggestion(null);
+    setClassificationNotice(null);
+  };
+
+  const runFoodClassification = async (uri: string) => {
+    const generation = ++classifyGenerationRef.current;
+
+    setClassifying(true);
+    clearAiSuggestionFields();
+
+    try {
+      const { foodLabel, category: predictedCategory, confidence } =
+        await classifyFoodImage(uri);
+
+      if (generation !== classifyGenerationRef.current) {
+        return;
+      }
+
+      setCategory(predictedCategory);
+
+      const itemName = foodLabelToItemName(foodLabel, predictedCategory);
+      if (itemName) {
+        setName(itemName);
+        setErrors((prev) => clearFieldError(prev, "name"));
+        setNameSuggestion(null);
+      } else if (foodLabel.trim()) {
+        setName("");
+        setNameSuggestion(formatFoodLabel(foodLabel));
+      } else {
+        setName("");
+        setNameSuggestion(null);
+      }
+
+      setAiSuggested(true);
+      setClassificationConfidence(confidence);
+    } catch (error) {
+      if (generation !== classifyGenerationRef.current) {
+        return;
+      }
+
+      const message =
+        error instanceof Error ? error.message : "Detection failed";
+      console.error("classify-food failed", { url: CLASSIFY_FOOD_URL, error });
+      Alert.alert(
+        "Detection failed",
+        `${message}\n\nServer: ${CLASSIFY_FOOD_URL}\n(Generic ImageNet labels — edit name and category before publishing.)`,
+      );
+      setClassificationNotice(
+        "Could not detect name or category — please enter manually.",
+      );
+    } finally {
+      if (generation === classifyGenerationRef.current) {
+        setClassifying(false);
+      }
+    }
+  };
+
+  const applyPickedImage = (uri: string) => {
+    setImageUri(uri);
+    setErrors((prev) => clearFieldError(prev, "image"));
+    void runFoodClassification(uri);
+  };
+
+  const validateForm = (): boolean => {
+    const next: FormErrors = {};
+    if (!imageUri) next.image = "Please add a photo for this item";
+    if (!name.trim()) next.name = "Please enter item name";
+    if (!quantity || parseInt(quantity, 10) <= 0)
+      next.quantity = "Please enter valid quantity";
+
+    const retail = parseFloat(retailPrice);
+    if (!Number.isFinite(retail) || retail <= 0)
+      next.retailPrice = "Please enter a valid retail value";
+
+    if (!useSmartPricing) {
+      const sale = parseFloat(salePrice);
+      if (!Number.isFinite(sale) || sale <= 0)
+        next.salePrice = "Please enter a valid sale price";
+      else if (sale >= retail)
+        next.salePrice = "Sale price must be less than retail value";
+    }
+
+    setErrors(next);
+    return Object.keys(next).length === 0;
   };
 
   const onDateChange = (event: { type?: string }, selectedDate?: Date) => {
@@ -106,9 +224,8 @@ export function AddItemModal({
     if (selectedTime && event.type !== "dismissed") setExpiryTime(selectedTime);
   };
 
-  const pickImage = async () => {
+  const pickImageFromLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
     if (status !== "granted") {
       Alert.alert("Permission needed", "Please grant camera roll permissions");
       return;
@@ -122,57 +239,47 @@ export function AddItemModal({
     });
 
     if (!result.canceled) {
-      setImageUri(result.assets[0].uri);
+      applyPickedImage(result.assets[0].uri);
     }
   };
 
-  const uploadImage = async (uri: string): Promise<string> => {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    const storage = getStorage();
-    const filename = `inventory/${sellerId}/${Date.now()}.jpg`;
-    const storageRef = ref(storage, filename);
+  const pickImageFromCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission needed", "Please grant camera permissions");
+      return;
+    }
 
-    await uploadBytes(storageRef, blob);
-    return await getDownloadURL(storageRef);
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      applyPickedImage(result.assets[0].uri);
+    }
+  };
+
+  const pickImage = () => {
+    Alert.alert("Item photo", "Choose a source", [
+      { text: "Camera", onPress: () => void pickImageFromCamera() },
+      { text: "Gallery", onPress: () => void pickImageFromLibrary() },
+      { text: "Cancel", style: "cancel" },
+    ]);
   };
 
   const handleSubmit = async () => {
-    if (!name.trim()) {
-      Alert.alert("Error", "Please enter item name");
-      return;
-    }
-
-    if (!quantity || parseInt(quantity) <= 0) {
-      Alert.alert("Error", "Please enter valid quantity");
-      return;
-    }
+    if (!validateForm()) return;
+    if (!imageUri) return;
 
     const retail = parseFloat(retailPrice);
-    if (!Number.isFinite(retail) || retail <= 0) {
-      Alert.alert("Error", "Please enter a valid retail value");
-      return;
-    }
-
-    if (!useSmartPricing) {
-      const sale = parseFloat(salePrice);
-      if (!Number.isFinite(sale) || sale <= 0) {
-        Alert.alert("Error", "Please enter a valid sale price");
-        return;
-      }
-      if (sale >= retail) {
-        Alert.alert("Error", "Sale price must be less than retail value");
-        return;
-      }
-    }
-
     setLoading(true);
     try {
-      let imageUrl: string | undefined;
-
-      if (imageUri) {
-        imageUrl = await uploadImage(imageUri);
-      }
+      const imageUrl = await uploadImageFromUri(
+        imageUri,
+        `sellers/${sellerId}/inventory/${Date.now()}.jpg`,
+      );
 
       const listFloor = useSmartPricing
         ? computeInitialListingAnchor(retail, hoursUntilExpiry(expiryAt))
@@ -189,6 +296,11 @@ export function AddItemModal({
         expiryDate: formatIsoDate(expiryDate),
         expiryAt,
         imageUrl,
+        aiDetected: aiSuggested,
+        classificationConfidence:
+          aiSuggested && classificationConfidence != null
+            ? classificationConfidence
+            : undefined,
       });
 
       Alert.alert("Success", "Item added successfully!");
@@ -197,7 +309,14 @@ export function AddItemModal({
       onSuccess?.();
     } catch (error) {
       console.error("Error adding item:", error);
-      Alert.alert("Error", "Failed to add item. Please try again.");
+      const message =
+        error instanceof Error ? error.message : "Failed to add item";
+      setErrors({
+        submit:
+          message.includes("image") || message.includes("Image")
+            ? "Could not upload photo. Check your connection and try again."
+            : "Failed to add item. Please try again.",
+      });
     } finally {
       setLoading(false);
     }
@@ -232,23 +351,97 @@ export function AddItemModal({
           </View>
 
           <ScrollView style={styles.form} showsVerticalScrollIndicator={false}>
-            {/* Item Name */}
+            <FormSubmitError message={errors.submit} />
+
+            {/* Image upload — pick first to auto-fill name & category */}
             <View style={styles.field}>
-              <Text style={styles.label}>Item Name *</Text>
+              <Text style={styles.label}>Item photo *</Text>
+              <Text style={styles.fieldHint}>
+                Photo is saved with your listing and used for AI name/category
+                suggestions
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.uploadBox,
+                  errors.image && styles.uploadBoxError,
+                ]}
+                onPress={pickImage}
+                disabled={classifying}
+              >
+                {imageUri ? (
+                  <Image
+                    source={{ uri: imageUri }}
+                    style={styles.uploadedImage}
+                  />
+                ) : (
+                  <>
+                    <Upload size={32} color={colors.textSoft} />
+                    <Text style={styles.uploadText}>Tap to add photo</Text>
+                    <Text style={styles.uploadSubtext}>
+                      Camera or gallery · PNG, JPG up to 10MB
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              {classifying ? (
+                <View style={styles.classifyingRow}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={styles.classifyingText}>
+                    Detecting name and category…
+                  </Text>
+                </View>
+              ) : null}
+              <FieldError message={errors.image} />
+            </View>
+
+            <View style={styles.field}>
+              <View style={styles.labelRow}>
+                <Text style={[styles.label, { marginBottom: 0 }]}>
+                  Item Name *
+                </Text>
+                {classifying ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : null}
+              </View>
               <TextInput
-                style={styles.input}
-                placeholder="e.g., Chocolate Croissant"
+                style={[
+                  styles.input,
+                  errors.name && styles.inputError,
+                  classifying && styles.inputDisabled,
+                ]}
+                placeholder={
+                  classifying
+                    ? "Detecting from photo…"
+                    : nameSuggestion
+                      ? `AI saw “${nameSuggestion}” — enter your menu name`
+                      : "e.g., Almond Croissant"
+                }
                 value={name}
-                onChangeText={setName}
+                editable={!classifying}
+                onChangeText={(text) => {
+                  setName(text);
+                  setErrors((prev) => clearFieldError(prev, "name"));
+                }}
                 placeholderTextColor={colors.textSoft}
               />
+              <FieldError message={errors.name} />
             </View>
 
             {/* Category Dropdown */}
             <View style={styles.field}>
-              <Text style={styles.label}>Category *</Text>
+              <View style={styles.labelRow}>
+                <Text style={[styles.label, { marginBottom: 0 }]}>Category *</Text>
+                {classifying ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : null}
+              </View>
               <Dropdown
-                style={styles.dropdown}
+                key={`category-${imageUri ?? "none"}-${category}`}
+                style={[
+                  styles.dropdown,
+                  classifying && styles.dropdownDisabled,
+                ]}
+                disable={classifying}
                 placeholderStyle={styles.dropdownPlaceholder}
                 selectedTextStyle={styles.dropdownSelectedText}
                 inputSearchStyle={styles.dropdownSearch}
@@ -258,16 +451,34 @@ export function AddItemModal({
                 maxHeight={300}
                 labelField="label"
                 valueField="value"
-                placeholder="Select category"
+                placeholder={
+                  classifying ? "Detecting category…" : "Select category"
+                }
                 searchPlaceholder="Search..."
                 value={category}
                 onChange={(item) => {
                   setCategory(item.value);
                 }}
-                renderRightIcon={() => (
-                  <ChevronDown size={20} color={colors.textSoft} />
-                )}
+                renderRightIcon={() =>
+                  classifying ? null : (
+                    <ChevronDown size={20} color={colors.textSoft} />
+                  )
+                }
               />
+              {aiSuggested && !classifying ? (
+                <Text style={styles.aiHint}>
+                  Suggested by AI (generic names like croissant, cake) — rename
+                  and pick the right category before you publish.
+                  {classificationConfidence != null
+                    ? ` (${Math.round(classificationConfidence * 100)}% confident)`
+                    : ""}
+                </Text>
+              ) : null}
+              {classificationNotice ? (
+                <Text style={styles.classificationNotice}>
+                  {classificationNotice}
+                </Text>
+              ) : null}
             </View>
 
             {/* Smart pricing */}
@@ -292,17 +503,20 @@ export function AddItemModal({
               </View>
             </View>
 
-            {/* Quantity */}
             <View style={styles.field}>
               <Text style={styles.label}>Quantity in stock *</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, errors.quantity && styles.inputError]}
                 placeholder="1"
                 value={quantity}
-                onChangeText={(t) => setQuantity(t.replace(/[^0-9]/g, ""))}
+                onChangeText={(t) => {
+                  setQuantity(t.replace(/[^0-9]/g, ""));
+                  setErrors((prev) => clearFieldError(prev, "quantity"));
+                }}
                 keyboardType="number-pad"
                 placeholderTextColor={colors.textSoft}
               />
+              <FieldError message={errors.quantity} />
             </View>
 
             {/* Retail & sale */}
@@ -317,16 +531,21 @@ export function AddItemModal({
                 <View style={styles.priceInput}>
                   <Text style={styles.dollarSign}>RM</Text>
                   <TextInput
-                    style={styles.priceInputField}
+                    style={[
+                      styles.priceInputField,
+                      errors.retailPrice && styles.inputError,
+                    ]}
                     placeholder="0.00"
                     value={retailPrice}
-                    onChangeText={(t) =>
-                      setRetailPrice(t.replace(/[^0-9.]/g, ""))
-                    }
+                    onChangeText={(t) => {
+                      setRetailPrice(t.replace(/[^0-9.]/g, ""));
+                      setErrors((prev) => clearFieldError(prev, "retailPrice"));
+                    }}
                     keyboardType="decimal-pad"
                     placeholderTextColor={colors.textSoft}
                   />
                 </View>
+                <FieldError message={errors.retailPrice} />
               </View>
 
               <View style={[styles.field, { flex: 1, marginLeft: spacing.sm }]}>
@@ -340,6 +559,7 @@ export function AddItemModal({
                   style={[
                     styles.priceInput,
                     useSmartPricing && styles.priceInputDisabled,
+                    errors.salePrice && styles.inputError,
                   ]}
                 >
                   <Text style={styles.dollarSign}>RM</Text>
@@ -353,9 +573,10 @@ export function AddItemModal({
                           : "—"
                         : salePrice
                     }
-                    onChangeText={(t) =>
-                      setSalePrice(t.replace(/[^0-9.]/g, ""))
-                    }
+                    onChangeText={(t) => {
+                      setSalePrice(t.replace(/[^0-9.]/g, ""));
+                      setErrors((prev) => clearFieldError(prev, "salePrice"));
+                    }}
                     keyboardType="decimal-pad"
                     editable={!useSmartPricing}
                     placeholderTextColor={colors.textSoft}
@@ -365,7 +586,9 @@ export function AddItemModal({
                   <Text style={styles.fieldHint}>
                     Live price updates for buyers after you publish
                   </Text>
-                ) : null}
+                ) : (
+                  <FieldError message={errors.salePrice} />
+                )}
               </View>
             </View>
 
@@ -388,25 +611,6 @@ export function AddItemModal({
               onTimeChange={onTimeChange}
               disabled={loading}
             />
-
-            {/* Image Upload */}
-            <View style={styles.field}>
-              <Text style={styles.label}>Item Image (Optional)</Text>
-              <TouchableOpacity style={styles.uploadBox} onPress={pickImage}>
-                {imageUri ? (
-                  <Image
-                    source={{ uri: imageUri }}
-                    style={styles.uploadedImage}
-                  />
-                ) : (
-                  <>
-                    <Upload size={32} color={colors.textSoft} />
-                    <Text style={styles.uploadText}>Click to upload image</Text>
-                    <Text style={styles.uploadSubtext}>PNG, JPG up to 5MB</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
 
             {/* Tips */}
             <View style={styles.infoBox}>
@@ -525,6 +729,23 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.text,
   },
+  inputError: {
+    borderColor: colors.error,
+  },
+  inputDisabled: {
+    opacity: 0.65,
+    backgroundColor: colors.backgroundSoft,
+  },
+  classifyingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  classifyingText: {
+    fontSize: 13,
+    color: colors.textSoft,
+  },
   dropdown: {
     height: 50,
     borderColor: colors.border,
@@ -580,6 +801,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     minHeight: 150,
+  },
+  uploadBoxError: {
+    borderColor: colors.error,
   },
   uploadedImage: {
     width: "100%",
@@ -701,5 +925,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSoft,
     marginTop: 4,
+  },
+  dropdownDisabled: {
+    opacity: 0.65,
+    backgroundColor: colors.backgroundSoft,
+  },
+  aiHint: {
+    fontSize: 12,
+    color: colors.primary,
+    marginTop: spacing.sm,
+    lineHeight: 17,
+  },
+  classificationNotice: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: spacing.sm,
+    lineHeight: 17,
   },
 });

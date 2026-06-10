@@ -1,5 +1,6 @@
 import { Text } from "@/src/components/StyledText";
 import { DatasetAnalyticsBundle } from "@/src/ai/types";
+import { AI_API_BASE_URL } from "@/src/ai/api";
 import {
   loadDatasetAnalytics,
   loadFirebaseOnlyAnalytics,
@@ -36,6 +37,25 @@ import Svg, { Circle, Line as SvgLine } from "react-native-svg";
 const { width: SCREEN_W } = Dimensions.get("window");
 const CHART_W = SCREEN_W - spacing.lg * 2 - spacing.lg * 2;
 
+type AnalyticsTab = "overview" | "sales" | "waste" | "planning";
+
+const ANALYTICS_TABS: { key: AnalyticsTab; label: string; hint: string }[] = [
+  { key: "overview", label: "Summary", hint: "Quick numbers and tips" },
+  { key: "sales", label: "Sales", hint: "What sells and when" },
+  { key: "waste", label: "Leftovers", hint: "What did not sell" },
+  { key: "planning", label: "Bake plan", hint: "How much to make" },
+];
+
+const KPI_HELP: Record<string, string> = {
+  revenue:
+    "Total money earned from items sold in your sales history.",
+  sold: "How many individual items customers bought.",
+  waste: "Share of food you made but did not sell.",
+  conversion: "How much of what you baked actually sold.",
+  avg: "Average price per item sold.",
+  top: "Your most popular product right now.",
+};
+
 export default function Analytics() {
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
   const handleBack = () =>
@@ -46,6 +66,10 @@ export default function Analytics() {
   const [bundle, setBundle] = useState<DatasetAnalyticsBundle | null>(null);
   const [cafeId, setCafeId] = useState<string | null>(null);
   const [cafeName, setCafeName] = useState("");
+  const [activeTab, setActiveTab] = useState<AnalyticsTab>("overview");
+  const [selectedKpi, setSelectedKpi] = useState<string | null>(null);
+  const [selectedTopItem, setSelectedTopItem] = useState<string | null>(null);
+  const [selectedHeatKey, setSelectedHeatKey] = useState<string | null>(null);
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
@@ -63,11 +87,21 @@ export default function Analytics() {
 
       if (!id) {
         const live = await loadFirebaseOnlyAnalytics(user.uid, business);
+        if (!live) {
+          console.warn(
+            "[analytics] No cafeId and no inventory/orders for live charts.",
+          );
+        }
         setBundle(live);
         return;
       }
 
       const data = await loadDatasetAnalytics(id, user.uid);
+      if (!data) {
+        console.warn(
+          `[analytics] No rows for cafe ${id}. AI API: ${AI_API_BASE_URL} — check training CSV on server and seller inventory.`,
+        );
+      }
       setBundle(data);
     } catch (e) {
       console.error("Analytics load error:", e);
@@ -94,7 +128,7 @@ export default function Analytics() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Loading your dataset analytics…</Text>
+          <Text style={styles.loadingText}>Loading your shop insights…</Text>
         </View>
       </SafeAreaView>
     );
@@ -114,10 +148,10 @@ export default function Analytics() {
           </TouchableOpacity>
           <View style={styles.emptyCard}>
             <Brain size={48} color={colors.primary} />
-            <Text style={styles.emptyTitle}>No analytics data yet</Text>
+            <Text style={styles.emptyTitle}>No insights yet</Text>
             <Text style={styles.emptyBody}>
-              Train your AI model with a sales CSV for full dataset charts, or
-              add inventory and orders to see live store analytics here.
+              Upload your past sales file on the dashboard, or add listings and
+              complete a few orders — then come back here to see charts.
             </Text>
             <TouchableOpacity
               style={styles.ctaBtn}
@@ -147,11 +181,10 @@ export default function Analytics() {
           </TouchableOpacity>
           <View style={styles.emptyCard}>
             <BarChart3 size={48} color={colors.primary} />
-            <Text style={styles.emptyTitle}>No analytics data yet</Text>
+            <Text style={styles.emptyTitle}>No insights yet</Text>
             <Text style={styles.emptyBody}>
-              Your model is trained but we could not load dataset rows. Pull to
-              refresh, or add inventory and orders — we will show live store
-              analytics as a fallback.
+              Your sales file is linked but we could not load chart data. Pull
+              down to refresh, or upload your sales file again from the dashboard.
             </Text>
             <TouchableOpacity style={styles.ctaBtn} onPress={onRefresh}>
               <RefreshCw size={18} color={colors.white} />
@@ -165,8 +198,13 @@ export default function Analytics() {
 
   const sourceLabel =
     bundle.dataSource === "dataset"
-      ? "Training CSV dataset"
-      : "Live store data";
+      ? "From your uploaded sales file"
+      : "From live shop activity";
+
+  const activeTabMeta = ANALYTICS_TABS.find((t) => t.key === activeTab);
+  const selectedTopItemData = bundle.topSellingItems.find(
+    (i) => i.itemName === selectedTopItem,
+  );
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -180,227 +218,375 @@ export default function Analytics() {
           <TouchableOpacity style={styles.backBtn} onPress={handleBack}>
             <ArrowLeft size={22} color={colors.white} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Business Analytics</Text>
+          <Text style={styles.headerTitle}>Shop insights</Text>
           <Text style={styles.headerSub}>
-            {bundle.cafeName || cafeName} · {bundle.trainingRows.toLocaleString()}{" "}
-            rows
+            {bundle.cafeName || cafeName}
           </Text>
           <View style={styles.sourcePill}>
             <Database size={12} color={colors.white} />
             <Text style={styles.sourcePillText}>{sourceLabel}</Text>
           </View>
           <Text style={styles.headerMeta}>
-            {bundle.dateRange.start} → {bundle.dateRange.end}
+            {bundle.dateRange.start} to {bundle.dateRange.end}
             {bundle.modelAccuracy > 0
-              ? ` · R² ${(bundle.modelAccuracy * 100).toFixed(0)}%`
+              ? ` · suggestions about ${(bundle.modelAccuracy * 100).toFixed(0)}% reliable`
               : ""}
           </Text>
         </View>
 
         <View style={styles.body}>
-          {/* KPIs */}
-          <Text style={styles.sectionLabel}>Key metrics</Text>
-          <View style={styles.kpiGrid}>
-            <KpiCard label="Total revenue" value={`RM ${bundle.kpis.totalSales}`} />
-            <KpiCard label="Units sold" value={String(bundle.kpis.itemsSold)} />
-            <KpiCard
-              label="Waste rate"
-              value={`${bundle.kpis.wastePercentage}%`}
-              accent={colors.error}
-            />
-            <KpiCard
-              label="Conversion"
-              value={`${bundle.kpis.conversionRate}%`}
-              accent={colors.success}
-            />
-            <KpiCard
-              label="Avg unit value"
-              value={`RM ${bundle.kpis.averageOrderValue}`}
-            />
-            <KpiCard label="Top product" value={bundle.kpis.topProduct} small />
-          </View>
-
-          {bundle.itemForecasts && bundle.itemForecasts.length > 0 ? (
-            <Section title="Today's AI forecast" subtitle="Batch prediction for your menu">
-              <BarChart
-                data={bundle.itemForecasts.map((f) => ({
-                  value: f.predicted,
-                  label: f.item.slice(0, 5),
-                  frontColor: colors.success,
-                }))}
-                height={200}
-                width={CHART_W}
-                barWidth={24}
-                spacing={12}
-                showValuesOnTopOfBars
-                yAxisColor={colors.border}
-                xAxisColor={colors.border}
-              />
-            </Section>
+          <AnalyticsTabBar activeTab={activeTab} onChange={setActiveTab} />
+          {activeTabMeta ? (
+            <Text style={styles.tabHint}>{activeTabMeta.hint}</Text>
           ) : null}
 
-          {/* Sales over time */}
-          <Section title="Sales over time" subtitle="Revenue & orders">
-            {bundle.salesOverTime.length > 0 ? (
-              <ChartScroll width={Math.max(CHART_W, bundle.salesOverTime.length * 48)}>
-                <LineChart
-                  data={bundle.salesOverTime.map((d) => ({
-                    value: d.sales,
-                    label: d.label,
-                  }))}
-                  data2={bundle.salesOverTime.map((d) => ({
-                    value: d.orders * 10,
+          {(activeTab === "overview" || activeTab === "sales") && (
+            <>
+              <Text style={styles.sectionLabel}>At a glance</Text>
+              <Text style={styles.sectionSub}>Tap a number to see what it means</Text>
+              <View style={styles.kpiGrid}>
+                <KpiCard
+                  label="Money earned"
+                  value={`RM ${bundle.kpis.totalSales}`}
+                  selected={selectedKpi === "revenue"}
+                  onPress={() =>
+                    setSelectedKpi((k) => (k === "revenue" ? null : "revenue"))
+                  }
+                />
+                <KpiCard
+                  label="Items sold"
+                  value={String(bundle.kpis.itemsSold)}
+                  selected={selectedKpi === "sold"}
+                  onPress={() =>
+                    setSelectedKpi((k) => (k === "sold" ? null : "sold"))
+                  }
+                />
+                <KpiCard
+                  label="Left unsold"
+                  value={`${bundle.kpis.wastePercentage}%`}
+                  accent={colors.error}
+                  selected={selectedKpi === "waste"}
+                  onPress={() => {
+                    setSelectedKpi((k) => (k === "waste" ? null : "waste"));
+                    setActiveTab("waste");
+                  }}
+                />
+                <KpiCard
+                  label="Sold vs made"
+                  value={`${bundle.kpis.conversionRate}%`}
+                  accent={colors.success}
+                  selected={selectedKpi === "conversion"}
+                  onPress={() =>
+                    setSelectedKpi((k) =>
+                      k === "conversion" ? null : "conversion",
+                    )
+                  }
+                />
+                <KpiCard
+                  label="Avg sale price"
+                  value={`RM ${bundle.kpis.averageOrderValue}`}
+                  selected={selectedKpi === "avg"}
+                  onPress={() =>
+                    setSelectedKpi((k) => (k === "avg" ? null : "avg"))
+                  }
+                />
+                <KpiCard
+                  label="Best seller"
+                  value={bundle.kpis.topProduct}
+                  small
+                  selected={selectedKpi === "top"}
+                  onPress={() =>
+                    setSelectedKpi((k) => (k === "top" ? null : "top"))
+                  }
+                />
+              </View>
+              {selectedKpi && KPI_HELP[selectedKpi] ? (
+                <View style={styles.helpCard}>
+                  <Text style={styles.helpCardText}>{KPI_HELP[selectedKpi]}</Text>
+                </View>
+              ) : null}
+            </>
+          )}
+
+          {activeTab === "overview" && (
+            <>
+              <Section title="Tips for your shop" subtitle="Plain-language takeaways">
+                {bundle.insights.map((line, i) => (
+                  <View key={i} style={styles.insightRow}>
+                    <TrendingUp size={16} color={colors.primary} />
+                    <Text style={styles.insightText}>{line}</Text>
+                  </View>
+                ))}
+              </Section>
+
+              <Section title="How this works" subtitle="From sales file to insights">
+                <PipelineDiagram />
+              </Section>
+            </>
+          )}
+
+          {activeTab === "sales" && (
+            <>
+              <Section
+                title="Daily earnings"
+                subtitle="How much money you made each day"
+              >
+                {bundle.salesOverTime.length > 0 ? (
+                  <ChartScroll
+                    width={Math.max(CHART_W, bundle.salesOverTime.length * 48)}
+                  >
+                    <LineChart
+                      data={bundle.salesOverTime.map((d) => ({
+                        value: d.sales,
+                        label: d.label,
+                      }))}
+                      data2={bundle.salesOverTime.map((d) => ({
+                        value: d.orders * 10,
+                      }))}
+                      height={200}
+                      width={Math.max(CHART_W, bundle.salesOverTime.length * 48)}
+                      color={colors.primary}
+                      color2={colors.success}
+                      thickness={2}
+                      yAxisColor={colors.border}
+                      xAxisColor={colors.border}
+                      noOfSections={4}
+                      curved
+                      areaChart
+                      startFillColor={colors.primary}
+                      startOpacity={0.2}
+                      endOpacity={0}
+                      pointerConfig={{
+                        pointerStripHeight: 160,
+                        pointerColor: colors.primary,
+                        radius: 6,
+                        pointerLabelWidth: 120,
+                        pointerLabelHeight: 36,
+                        activatePointersOnLongPress: false,
+                        autoAdjustPointerLabelPosition: true,
+                        pointerLabelComponent: (
+                          items: { value: number }[],
+                        ) => (
+                          <View style={styles.pointerLabel}>
+                            <Text style={styles.pointerLabelText}>
+                              RM {items[0]?.value ?? 0}
+                            </Text>
+                          </View>
+                        ),
+                      }}
+                    />
+                  </ChartScroll>
+                ) : (
+                  <EmptyChart message="Add dates to your sales file to see daily trends" />
+                )}
+                <LegendRow items={["Money earned (RM)", "Orders (scaled)"]} />
+              </Section>
+
+              <Section
+                title="Best sellers"
+                subtitle="Tap a bar to see full details"
+              >
+                <BarChart
+                  data={bundle.topSellingItems.slice(0, 6).map((item) => ({
+                    value: item.sold,
+                    label: item.itemName.slice(0, 6),
+                    frontColor:
+                      selectedTopItem === item.itemName
+                        ? colors.success
+                        : colors.primary,
+                    onPress: () =>
+                      setSelectedTopItem((prev) =>
+                        prev === item.itemName ? null : item.itemName,
+                      ),
                   }))}
                   height={200}
-                  width={Math.max(CHART_W, bundle.salesOverTime.length * 48)}
+                  width={CHART_W}
+                  barWidth={28}
+                  spacing={14}
+                  yAxisColor={colors.border}
+                  xAxisColor={colors.border}
+                  showValuesOnTopOfBars
+                  focusBarOnPress
+                />
+                {selectedTopItemData ? (
+                  <View style={styles.detailCard}>
+                    <Text style={styles.detailTitle}>{selectedTopItemData.itemName}</Text>
+                    <Text style={styles.detailText}>
+                      Sold {selectedTopItemData.sold} · Made{" "}
+                      {selectedTopItemData.produced} · Earned RM{" "}
+                      {selectedTopItemData.revenue.toFixed(2)}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.tapHint}>Tap a bar above to see the product name</Text>
+                )}
+              </Section>
+
+              <Section title="Money by product" subtitle="Which items bring in the most">
+                <BarChart
+                  data={bundle.revenueByCategory.map((c) => ({
+                    value: c.value,
+                    label: c.label.slice(0, 6),
+                    frontColor: c.color,
+                  }))}
+                  height={200}
+                  width={CHART_W}
+                  barWidth={32}
+                  spacing={16}
+                  showValuesOnTopOfBars
+                  yAxisColor={colors.border}
+                  xAxisColor={colors.border}
+                />
+              </Section>
+
+              <Section
+                title="Busiest times"
+                subtitle="Tap a cell — darker means more orders"
+              >
+                <HeatmapGrid
+                  cells={bundle.heatmap}
+                  selectedKey={selectedHeatKey}
+                  onSelect={setSelectedHeatKey}
+                />
+                {selectedHeatKey ? (
+                  <Text style={styles.heatSelectionHint}>
+                    {selectedHeatKey.replace("|", " · ")} — tap again to clear
+                  </Text>
+                ) : null}
+              </Section>
+            </>
+          )}
+
+          {activeTab === "waste" && (
+            <>
+              <Section
+                title="Sold vs leftover"
+                subtitle="Green = sold · Red = left over"
+              >
+                <WasteStackedChart items={bundle.wasteAnalysis.slice(0, 5)} />
+                <LegendRow
+                  items={["Sold", "Left over"]}
+                  colors={[colors.success, colors.error]}
+                />
+              </Section>
+
+              <Section title="Where waste happens most" subtitle="Share of total leftovers">
+                <PieChart
+                  data={bundle.wasteAnalysis.slice(0, 5).map((item, i) => ({
+                    value: item.waste || 1,
+                    text: item.itemName.slice(0, 8),
+                    color: [
+                      colors.primary,
+                      colors.error,
+                      colors.success,
+                      "#C4A77D",
+                      "#8B6914",
+                    ][i],
+                  }))}
+                  radius={90}
+                  innerRadius={50}
+                  donut
+                  showText
+                  textColor={colors.text}
+                  textSize={10}
+                  focusOnPress
+                />
+              </Section>
+
+              <Section
+                title="Leftover trend"
+                subtitle="Unsold items over time — lower is better"
+              >
+                <LineChart
+                  data={bundle.surplusTrend.map((d) => ({
+                    value: d.surplus,
+                    label: d.label,
+                  }))}
+                  height={180}
+                  width={CHART_W}
+                  color={colors.error}
+                  areaChart
+                  startFillColor={colors.error}
+                  startOpacity={0.25}
+                  endOpacity={0}
+                  yAxisColor={colors.border}
+                  xAxisColor={colors.border}
+                  curved
+                />
+              </Section>
+
+              <Section
+                title="Did you bake too much?"
+                subtitle="Each dot is one product — closer to the line means less waste"
+              >
+                <ScatterPlot points={bundle.scatterData} />
+              </Section>
+            </>
+          )}
+
+          {activeTab === "planning" && (
+            <>
+              {bundle.itemForecasts && bundle.itemForecasts.length > 0 ? (
+                <Section
+                  title="How much to bake today"
+                  subtitle="Suggested amounts from your sales history"
+                >
+                  <BarChart
+                    data={bundle.itemForecasts.map((f) => ({
+                      value: f.predicted,
+                      label: f.item.slice(0, 5),
+                      frontColor: colors.success,
+                    }))}
+                    height={200}
+                    width={CHART_W}
+                    barWidth={24}
+                    spacing={12}
+                    showValuesOnTopOfBars
+                    yAxisColor={colors.border}
+                    xAxisColor={colors.border}
+                  />
+                  <Text style={styles.tapHint}>
+                    Use the Bake planner on your dashboard for full suggestions
+                  </Text>
+                </Section>
+              ) : (
+                <Section title="How much to bake today" subtitle="Upload a sales file first">
+                  <EmptyChart message="Upload your sales file on the dashboard to get bake suggestions here" />
+                </Section>
+              )}
+
+              <Section
+                title="What happened vs what we expected"
+                subtitle="Compare actual sales with suggested amounts"
+              >
+                <LineChart
+                  data={bundle.actualVsPredicted.map((d) => ({
+                    value: d.actual,
+                    label: d.label,
+                  }))}
+                  data2={bundle.actualVsPredicted.map((d) => ({
+                    value: d.predicted,
+                  }))}
+                  height={200}
+                  width={CHART_W}
                   color={colors.primary}
                   color2={colors.success}
                   thickness={2}
                   yAxisColor={colors.border}
                   xAxisColor={colors.border}
                   noOfSections={4}
-                  curved
-                  areaChart
-                  startFillColor={colors.primary}
-                  startOpacity={0.2}
-                  endOpacity={0}
                 />
-              </ChartScroll>
-            ) : (
-              <EmptyChart message="Add dated sales rows to see trends" />
-            )}
-            <LegendRow items={["Revenue (RM)", "Orders (×10)"]} />
-          </Section>
+                <LegendRow items={["Actually sold", "Expected to sell"]} />
+              </Section>
 
-          {/* Top items bar */}
-          <Section title="Top selling items" subtitle="Units sold by product">
-            <BarChart
-              data={bundle.topSellingItems.slice(0, 6).map((item) => ({
-                value: item.sold,
-                label: item.itemName.slice(0, 6),
-                frontColor: colors.primary,
-              }))}
-              height={200}
-              width={CHART_W}
-              barWidth={28}
-              spacing={14}
-              yAxisColor={colors.border}
-              xAxisColor={colors.border}
-              showValuesOnTopOfBars
-            />
-          </Section>
-
-          {/* Waste stacked + pie */}
-          <Section title="Waste vs sold" subtitle="Stacked by item">
-            <WasteStackedChart items={bundle.wasteAnalysis.slice(0, 5)} />
-            <LegendRow items={["Sold", "Waste"]} colors={[colors.success, colors.error]} />
-          </Section>
-
-          <Section title="Waste distribution" subtitle="Share of total waste">
-            <PieChart
-              data={bundle.wasteAnalysis.slice(0, 5).map((item, i) => ({
-                value: item.waste || 1,
-                text: item.itemName.slice(0, 8),
-                color: [colors.primary, colors.error, colors.success, "#C4A77D", "#8B6914"][i],
-              }))}
-              radius={90}
-              innerRadius={50}
-              donut
-              showText
-              textColor={colors.text}
-              textSize={10}
-            />
-          </Section>
-
-          {/* Actual vs predicted */}
-          <Section title="Actual vs predicted" subtitle="Sold units · AI-enhanced where available">
-            <LineChart
-              data={bundle.actualVsPredicted.map((d) => ({
-                value: d.actual,
-                label: d.label,
-              }))}
-              data2={bundle.actualVsPredicted.map((d) => ({
-                value: d.predicted,
-              }))}
-              height={200}
-              width={CHART_W}
-              color={colors.primary}
-              color2={colors.success}
-              thickness={2}
-              dashed={false}
-              yAxisColor={colors.border}
-              xAxisColor={colors.border}
-              noOfSections={4}
-            />
-            <LegendRow items={["Actual sold", "Predicted"]} />
-          </Section>
-
-          {/* Surplus area trend */}
-          <Section title="Surplus trend" subtitle="Unsold units over time">
-            <LineChart
-              data={bundle.surplusTrend.map((d) => ({
-                value: d.surplus,
-                label: d.label,
-              }))}
-              height={180}
-              width={CHART_W}
-              color={colors.error}
-              areaChart
-              startFillColor={colors.error}
-              startOpacity={0.25}
-              endOpacity={0}
-              yAxisColor={colors.border}
-              xAxisColor={colors.border}
-              curved
-            />
-          </Section>
-
-          {/* Revenue breakdown */}
-          <Section title="Revenue breakdown" subtitle="By top products">
-            <BarChart
-              data={bundle.revenueByCategory.map((c) => ({
-                value: c.value,
-                label: c.label,
-                frontColor: c.color,
-              }))}
-              height={200}
-              width={CHART_W}
-              barWidth={32}
-              spacing={16}
-              showValuesOnTopOfBars
-              yAxisColor={colors.border}
-              xAxisColor={colors.border}
-            />
-          </Section>
-
-          {/* Heatmap */}
-          <Section title="Order heatmap" subtitle="Activity by day & time slot">
-            <HeatmapGrid cells={bundle.heatmap} />
-          </Section>
-
-          {/* Funnel */}
-          <Section title="Sales funnel" subtitle="Prepared → sold journey (dataset)">
-            <FunnelChart stages={bundle.funnel} />
-          </Section>
-
-          {/* Scatter */}
-          <Section title="Prepared vs sold" subtitle="Per-item production efficiency">
-            <ScatterPlot points={bundle.scatterData} />
-          </Section>
-
-          {/* Insights */}
-          <Section title="AI insights" subtitle="Generated from your training data">
-            {bundle.insights.map((line, i) => (
-              <View key={i} style={styles.insightRow}>
-                <TrendingUp size={16} color={colors.primary} />
-                <Text style={styles.insightText}>{line}</Text>
-              </View>
-            ))}
-          </Section>
-
-          <Section title="Data pipeline" subtitle="How your CSV powers analytics">
-            <PipelineDiagram />
-          </Section>
+              <Section
+                title="From kitchen to customer"
+                subtitle="How much you made, sold, and had left over"
+              >
+                <FunnelChart stages={bundle.funnel} />
+              </Section>
+            </>
+          )}
 
           <View style={{ height: 40 }} />
         </View>
@@ -409,19 +595,60 @@ export default function Analytics() {
   );
 }
 
+function AnalyticsTabBar({
+  activeTab,
+  onChange,
+}: {
+  activeTab: AnalyticsTab;
+  onChange: (tab: AnalyticsTab) => void;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.tabBar}
+    >
+      {ANALYTICS_TABS.map((tab) => {
+        const active = activeTab === tab.key;
+        return (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.tabChip, active && styles.tabChipActive]}
+            onPress={() => onChange(tab.key)}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.tabChipText, active && styles.tabChipTextActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
 function KpiCard({
   label,
   value,
   accent,
   small,
+  selected,
+  onPress,
 }: {
   label: string;
   value: string;
   accent?: string;
   small?: boolean;
+  selected?: boolean;
+  onPress?: () => void;
 }) {
   return (
-    <View style={styles.kpiCard}>
+    <TouchableOpacity
+      style={[styles.kpiCard, selected && styles.kpiCardSelected]}
+      onPress={onPress}
+      activeOpacity={onPress ? 0.85 : 1}
+      disabled={!onPress}
+    >
       <Text style={styles.kpiLabel}>{label}</Text>
       <Text
         style={[styles.kpiValue, accent ? { color: accent } : null, small && styles.kpiSmall]}
@@ -429,7 +656,7 @@ function KpiCard({
       >
         {value}
       </Text>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -486,7 +713,7 @@ function WasteStackedChart({
               />
             </View>
             <Text style={styles.wasteStackMeta}>
-              {item.sold}/{item.waste}
+              {item.sold} sold · {item.waste} left
             </Text>
           </View>
         );
@@ -543,8 +770,12 @@ function LegendRow({
 
 function HeatmapGrid({
   cells,
+  selectedKey,
+  onSelect,
 }: {
   cells: { day: string; time: string; orders: number }[];
+  selectedKey?: string | null;
+  onSelect?: (key: string | null) => void;
 }) {
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const times = ["Morning", "Afternoon", "Evening", "Night"];
@@ -556,7 +787,13 @@ function HeatmapGrid({
         <View style={styles.heatCorner} />
         {times.map((t) => (
           <Text key={t} style={styles.heatColLabel}>
-            {t.slice(0, 3)}
+            {t === "Morning"
+              ? "AM"
+              : t === "Afternoon"
+                ? "Mid"
+                : t === "Evening"
+                  ? "Eve"
+                  : "Night"}
           </Text>
         ))}
       </View>
@@ -568,18 +805,25 @@ function HeatmapGrid({
               (c) => c.day.startsWith(day.slice(0, 3)) && c.time === time,
             );
             const intensity = (cell?.orders ?? 0) / max;
+            const key = `${day}|${time}`;
+            const selected = selectedKey === key;
             return (
-              <View
-                key={`${day}-${time}`}
+              <TouchableOpacity
+                key={key}
                 style={[
                   styles.heatCell,
                   {
                     backgroundColor: `rgba(106, 60, 0, ${0.12 + intensity * 0.75})`,
                   },
+                  selected && styles.heatCellSelected,
                 ]}
+                onPress={() =>
+                  onSelect?.(selected ? null : key)
+                }
+                activeOpacity={0.85}
               >
                 <Text style={styles.heatCellText}>{cell?.orders ?? 0}</Text>
-              </View>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -669,18 +913,20 @@ function ScatterPlot({
           </Text>
         ))}
       </View>
-      <Text style={styles.axisHint}>X: prepared · Y: sold</Text>
+      <Text style={styles.axisHint}>
+        Left = how much you made · Up = how much sold
+      </Text>
     </View>
   );
 }
 
 function PipelineDiagram() {
   const steps = [
-    { icon: Database, label: "CSV upload" },
-    { icon: BarChart3, label: "Assessment" },
-    { icon: Brain, label: "Train model" },
-    { icon: Sparkles, label: "Predict" },
-    { icon: TrendingUp, label: "Analytics" },
+    { icon: Database, label: "Upload sales file" },
+    { icon: BarChart3, label: "We read it" },
+    { icon: Brain, label: "Learn patterns" },
+    { icon: Sparkles, label: "Bake suggestions" },
+    { icon: TrendingUp, label: "See insights" },
   ];
   return (
     <View style={styles.pipeline}>
@@ -783,6 +1029,92 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   body: { padding: spacing.lg, marginTop: -spacing.md },
+  tabBar: {
+    gap: spacing.sm,
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  tabChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  tabChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  tabChipText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textSoft,
+  },
+  tabChipTextActive: {
+    color: colors.white,
+  },
+  tabHint: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginBottom: spacing.md,
+  },
+  helpCard: {
+    backgroundColor: colors.primarySoft,
+    borderRadius: 12,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  helpCardText: {
+    fontSize: 13,
+    color: colors.text,
+    lineHeight: 19,
+  },
+  detailCard: {
+    marginTop: spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: 10,
+    padding: spacing.sm,
+  },
+  detailTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 2,
+  },
+  detailText: {
+    fontSize: 12,
+    color: colors.textSoft,
+  },
+  tapHint: {
+    fontSize: 11,
+    color: colors.textSoft,
+    marginTop: spacing.sm,
+    textAlign: "center",
+    fontStyle: "italic",
+  },
+  pointerLabel: {
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  pointerLabelText: {
+    color: colors.white,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  heatCellSelected: {
+    borderWidth: 2,
+    borderColor: colors.primary,
+  },
+  heatSelectionHint: {
+    fontSize: 11,
+    color: colors.primary,
+    marginTop: spacing.sm,
+    textAlign: "center",
+    fontWeight: "600",
+  },
   section: { marginBottom: spacing.lg },
   sectionLabel: {
     fontSize: 17,
@@ -822,6 +1154,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 4,
     elevation: 1,
+    borderWidth: 1,
+    borderColor: "transparent",
+  },
+  kpiCardSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
   },
   kpiLabel: { fontSize: 11, color: colors.textSoft, fontWeight: "600" },
   kpiValue: {

@@ -1,83 +1,92 @@
-import InputField from '@/src/components/InputField'
-import PrimaryButton from '@/src/components/PrimaryButton'
-import { Text } from '@/src/components/StyledText'
-import { auth } from '@/src/services/firebase/config'
-import { getSellerPostAuthRoute } from '@/src/services/firebase/sellerRegistration'
-import { getUserProfile, SellerProfile } from '@/src/services/firebase/user'
-import { colors, spacing } from '@/src/theme/styles'
-import { router } from 'expo-router'
-import { signInWithEmailAndPassword } from 'firebase/auth'
-import { ChevronLeft, Eye, Lock, Mail } from 'lucide-react-native'
-import { useState } from 'react'
-import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native'
+import { FormSubmitError } from "@/src/components/FieldError";
+import { FormField } from "@/src/components/FormField";
+import InputField from "@/src/components/InputField";
+import PrimaryButton from "@/src/components/PrimaryButton";
+import { Text } from "@/src/components/StyledText";
+import { auth } from "@/src/services/firebase/config";
+import { getSellerPostAuthRoute } from "@/src/services/firebase/sellerRegistration";
+import { getUserProfile, SellerProfile } from "@/src/services/firebase/user";
+import { colors, spacing } from "@/src/theme/styles";
+import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
+import { router } from "expo-router";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { ChevronLeft, Eye, Lock, Mail } from "lucide-react-native";
+import { useState } from "react";
+import { StyleSheet, TouchableOpacity, View } from "react-native";
 
 export default function LoginScreen() {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
 
   const handleLogin = async () => {
-    if (!email.trim() || !password.trim()) {
-      Alert.alert('Error', 'Please fill in all fields')
-      return
+    const nextErrors: FormErrors = {};
+
+    if (!email.trim()) {
+      nextErrors.email = "Email is required";
+    } else if (!email.includes("@")) {
+      nextErrors.email = "Enter a valid email address";
     }
 
-    if (!email.includes('@')) {
-      Alert.alert('Error', 'Please enter a valid email address')
-      return
+    if (!password.trim()) {
+      nextErrors.password = "Password is required";
     }
 
-    setLoading(true)
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
+      return;
+    }
+
+    setErrors({});
+    setLoading(true);
     try {
-      // Sign in with Firebase
-      const userCredential = await signInWithEmailAndPassword(auth, email, password)
-      const user = userCredential.user
-
-      // Get user profile to determine role
-      const profile = await getUserProfile(user.uid)
+      const userCredential = await signInWithEmailAndPassword(
+        auth,
+        email,
+        password,
+      );
+      const user = userCredential.user;
+      const profile = await getUserProfile(user.uid);
 
       if (!profile) {
-        throw new Error('User profile not found')
+        throw new Error("User profile not found");
       }
 
-      if (profile.role === 'seller') {
-        router.replace(getSellerPostAuthRoute(profile as SellerProfile))
+      if (profile.role === "seller") {
+        router.replace(getSellerPostAuthRoute(profile as SellerProfile));
       } else {
-        router.replace('/(buyer)/buyerhome')
+        router.replace("/(buyer)/buyerhome");
       }
-    } catch (error: any) {
-      console.error('Login error:', error)
-      
-      let errorMessage = 'Something went wrong'
-      
-      if (error.code === 'auth/invalid-credential') {
-        errorMessage = 'Invalid email or password'
-      } else if (error.code === 'auth/user-not-found') {
-        errorMessage = 'No account found with this email'
-      } else if (error.code === 'auth/wrong-password') {
-        errorMessage = 'Incorrect password'
+    } catch (error: unknown) {
+      console.error("Login error:", error);
+
+      let errorMessage = "Something went wrong. Please try again.";
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: string }).code)
+          : "";
+
+      if (
+        code === "auth/invalid-credential" ||
+        code === "auth/user-not-found" ||
+        code === "auth/wrong-password"
+      ) {
+        errorMessage = "Invalid email or password";
       }
-      
-      Alert.alert('Login Failed', errorMessage)
+
+      setErrors({ submit: errorMessage });
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
-
-  const handleForgotPassword = () => {
-    router.push('/(auth)/forgotpassword')
-  }
-
-  const handleSignUp = () => {
-    router.push('/(auth)/register')
-  }
+  };
 
   return (
     <View style={styles.container}>
       <TouchableOpacity
         style={styles.backLink}
-        onPress={() => router.replace('/')}
+        onPress={() => router.replace("/")}
         activeOpacity={0.8}
       >
         <ChevronLeft size={20} color={colors.primary} />
@@ -85,146 +94,133 @@ export default function LoginScreen() {
       </TouchableOpacity>
 
       <Text style={styles.title}>Welcome Back!</Text>
-      <Text style={styles.subtitle}>Save food, save money, save the planet</Text>
+      <Text style={styles.subtitle}>
+        Save food, save money, save the planet
+      </Text>
 
-      {/* Form Card */}
       <View style={styles.formCard}>
-        {/* Email */}
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Email Address</Text>
+        <FormSubmitError message={errors.submit} />
+
+        <FormField label="Email Address" error={errors.email}>
           <View style={styles.inputWrapper}>
             <Mail size={20} color={colors.textSoft} style={styles.inputIcon} />
             <InputField
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(text) => {
+                setEmail(text);
+                setErrors((prev) => clearFieldError(prev, "email"));
+              }}
               placeholder="you@example.com"
               keyboardType="email-address"
+              hasError={!!errors.email}
               style={styles.input}
             />
           </View>
-        </View>
+        </FormField>
 
-        {/* Password */}
-        <View style={styles.inputContainer}>
-          <Text style={styles.label}>Password</Text>
+        <FormField label="Password" error={errors.password}>
           <View style={styles.inputWrapper}>
             <Lock size={20} color={colors.textSoft} style={styles.inputIcon} />
             <InputField
               value={password}
-              onChangeText={setPassword}
+              onChangeText={(text) => {
+                setPassword(text);
+                setErrors((prev) => clearFieldError(prev, "password"));
+              }}
               placeholder="Enter your password"
               secureTextEntry={!showPassword}
+              hasError={!!errors.password}
               style={styles.input}
             />
-            <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
+            <TouchableOpacity
+              onPress={() => setShowPassword(!showPassword)}
+              style={styles.eyeIcon}
+            >
               <Eye size={20} color={colors.textSoft} />
             </TouchableOpacity>
           </View>
-        </View>
+        </FormField>
 
-        {/* Forgot Password */}
-        <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotPassword}>
+        <TouchableOpacity
+          onPress={() => router.push("/(auth)/forgotpassword")}
+          style={styles.forgotPassword}
+        >
           <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
         </TouchableOpacity>
 
-        {/* Sign In Button */}
         <PrimaryButton
-          title={loading ? 'Signing in...' : 'Sign In'}
+          title={loading ? "Signing in..." : "Sign In"}
           onPress={handleLogin}
           disabled={loading}
           style={styles.signInButton}
         />
       </View>
 
-      {/* Footer */}
       <View style={styles.footer}>
         <Text style={styles.footerText}>Don't have an account? </Text>
-        <TouchableOpacity onPress={handleSignUp}>
+        <TouchableOpacity onPress={() => router.push("/(auth)/register")}>
           <Text style={styles.signUpText}>Sign Up</Text>
         </TouchableOpacity>
       </View>
     </View>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    width: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: "100%",
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 24,
     backgroundColor: colors.background,
   },
-  logoContainer: {
-    marginBottom: 24,
-  },
-  logoCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  logoIcon: {
-    fontSize: 50,
-  },
   title: {
     fontSize: 32,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.text,
     marginBottom: 8,
-    textAlign: 'center',
+    textAlign: "center",
   },
   backLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
     marginBottom: spacing.md,
     gap: 4,
   },
   backLinkText: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: "600",
     color: colors.primary,
   },
   subtitle: {
     fontSize: 16,
     color: colors.textSoft,
     marginBottom: 32,
-    textAlign: 'center',
+    textAlign: "center",
   },
   formCard: {
-    width: '100%',
-    backgroundColor: '#fff',
+    width: "100%",
+    backgroundColor: "#fff",
     borderRadius: 16,
     padding: 24,
-    shadowColor: '#000',
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 3,
   },
-  inputContainer: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 8,
-  },
   inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    position: 'relative',
+    flexDirection: "row",
+    alignItems: "center",
+    position: "relative",
   },
   inputIcon: {
-    position: 'absolute',
+    position: "absolute",
     left: 12,
     zIndex: 1,
-    pointerEvents: 'none',
+    pointerEvents: "none",
   },
   input: {
     flex: 1,
@@ -236,24 +232,25 @@ const styles = StyleSheet.create({
     paddingRight: 40,
   },
   eyeIcon: {
-    position: 'absolute',
+    position: "absolute",
     right: 12,
     padding: 4,
   },
   forgotPassword: {
-    alignSelf: 'flex-end',
+    alignSelf: "flex-end",
     marginBottom: 20,
+    marginTop: -4,
   },
   forgotPasswordText: {
     color: colors.primary,
     fontSize: 14,
-    fontWeight: '500',
+    fontWeight: "500",
   },
   signInButton: {
     backgroundColor: colors.primary,
   },
   footer: {
-    flexDirection: 'row',
+    flexDirection: "row",
     marginTop: 24,
     backgroundColor: colors.background,
   },
@@ -264,6 +261,6 @@ const styles = StyleSheet.create({
   signUpText: {
     color: colors.primary,
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: "600",
   },
-})
+});

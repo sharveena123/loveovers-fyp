@@ -1,17 +1,18 @@
 import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
-    getConversation,
-    Message,
-    QUICK_MESSAGES,
-    sendMessage,
-    subscribeToMessages,
+  getConversation,
+  markConversationAsRead,
+  Message,
+  QUICK_MESSAGES,
+  sendMessage,
+  subscribeToMessages,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
 import { BUYER_ROUTES, goBackToReturn } from "@/src/utils/navigation";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Send } from "lucide-react-native";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -33,10 +34,14 @@ function goBackFromChat(
 
 export default function ChatDetail() {
   const router = useRouter();
-  const { id, returnTo } = useLocalSearchParams<{
+  const params = useLocalSearchParams<{
     id: string;
     returnTo?: string;
   }>();
+  const id = Array.isArray(params.id) ? params.id[0] : params.id;
+  const returnTo = Array.isArray(params.returnTo)
+    ? params.returnTo[0]
+    : params.returnTo;
   const { user, loading: authLoading } = useAuth();
   const [conversation, setConversation] = useState<any>(null);
   const [messages, setMessages] = useState<(Message & { id: string })[]>([]);
@@ -79,7 +84,6 @@ export default function ChatDetail() {
   useEffect(() => {
     if (!id) return;
 
-    // Subscribe to messages in real-time
     const unsubscribe = subscribeToMessages(id, (msgs) => {
       setMessages(msgs);
     });
@@ -89,9 +93,33 @@ export default function ChatDetail() {
     };
   }, [id]);
 
-  const handleSendMessage = async (text: string, isQuick: boolean = false) => {
-    if (!text.trim() || !user || !id) {
+  const clearUnread = useCallback(async () => {
+    if (!id || !user) return;
+    try {
+      await markConversationAsRead(id, "buyer");
+    } catch (error) {
+      console.error("Error clearing unread count:", error);
     }
+  }, [id, user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      clearUnread();
+    }, [clearUnread]),
+  );
+
+  useEffect(() => {
+    if (!id || !user) return;
+    const hasUnreadFromSeller = messages.some(
+      (m) => m.sendersRole === "seller" && m.read !== true,
+    );
+    if (hasUnreadFromSeller) {
+      clearUnread();
+    }
+  }, [id, user, messages, clearUnread]);
+
+  const handleSendMessage = async (text: string, isQuick: boolean = false) => {
+    if (!text.trim() || !user || !id) return;
 
     try {
       setSending(true);

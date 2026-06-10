@@ -50,6 +50,9 @@ export interface InventoryItem {
   expiryTime?: Timestamp;
   status: ItemStatus;
   imageUrl?: string;
+  /** True when category was set from AI classification (final category may differ). */
+  aiDetected?: boolean;
+  classificationConfidence?: number;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -132,17 +135,28 @@ class InventoryService {
       smartPricingEnabled?: boolean;
       expiryDate: string;
       expiryAt: Date;
-      imageUrl?: string;
+      imageUrl: string;
+      aiDetected?: boolean;
+      classificationConfidence?: number;
     }
   ): Promise<void> {
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new Error("Item name is required");
+    }
+    if (!data.imageUrl?.trim()) {
+      throw new Error("Item image is required");
+    }
+
     const inventoryRef = collection(db, "sellers", sellerId, "inventory");
 
     const listFloor = data.discountedPrice ?? data.price;
     const retail = data.originalPrice ?? data.price;
+    const imageUrl = data.imageUrl.trim();
 
-    const itemData: any = {
+    const itemData: Record<string, unknown> = {
       sellerId,
-      name: data.name,
+      name: trimmedName,
       type: "item" as ItemType,
       category: data.category,
       quantity: data.quantity,
@@ -154,13 +168,16 @@ class InventoryService {
       expiryDate: data.expiryDate,
       expiryTime: Timestamp.fromDate(data.expiryAt),
       status: "fresh" as ItemStatus,
+      imageUrl,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     };
 
-    // Only add imageUrl if it exists
-    if (data.imageUrl) {
-      itemData.imageUrl = data.imageUrl;
+    if (data.aiDetected) {
+      itemData.aiDetected = true;
+      if (typeof data.classificationConfidence === "number") {
+        itemData.classificationConfidence = data.classificationConfidence;
+      }
     }
 
     await addDoc(inventoryRef, itemData);

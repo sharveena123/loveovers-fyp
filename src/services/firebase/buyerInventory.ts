@@ -9,6 +9,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./config";
 import { computeLiveListingPrice } from "@/src/services/pricing/dynamicPricing";
+import { getListingFloor } from "@/src/utils/listingPrices";
 import { InventoryItem, inventoryService } from "./inventoryServices";
 
 export interface AvailableBag extends InventoryItem {
@@ -18,6 +19,8 @@ export interface AvailableBag extends InventoryItem {
   rating: number;
   latitude: number;
   longitude: number;
+  /** Seller list floor before live smart-pricing markdown (Firestore values). */
+  listFloorPrice: number;
   /** Extra markdown % applied on top of list floor when smart pricing is on. */
   smartLiveMarkdownPct?: number;
   smartAbVariant?: "A" | "B";
@@ -198,6 +201,7 @@ export const getAvailableBags = async (userLocation: {
 
         // Only include items with stock
         if (item.quantity - (item.sold || 0) > 0) {
+          const listFloor = getListingFloor(item);
           const live = computeLiveListingPrice(item, {
             now,
             closingHour,
@@ -214,6 +218,7 @@ export const getAvailableBags = async (userLocation: {
             rating: 4.8, // you can replace later
             latitude: sellerCoords.latitude,
             longitude: sellerCoords.longitude,
+            listFloorPrice: listFloor,
             price: live.price,
             discountedPrice: live.discountedPrice,
             originalPrice: live.originalPrice,

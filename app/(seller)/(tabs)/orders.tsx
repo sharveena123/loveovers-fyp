@@ -13,10 +13,12 @@ import {
   ShoppingBag,
   X,
 } from "lucide-react-native";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  FlatList,
   RefreshControl,
   SafeAreaView,
   ScrollView,
@@ -24,6 +26,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { Swipeable } from "react-native-gesture-handler";
+import type { Swipeable as SwipeableType } from "react-native-gesture-handler";
 
 type FilterStatus = "all" | "pending" | "ready" | "completed";
 
@@ -87,14 +91,98 @@ function formatOrderTime(createdAt: Order["createdAt"]) {
   });
 }
 
+function canMarkOrderCompleted(status: Order["status"]) {
+  return (
+    status === "pending" ||
+    status === "ready" ||
+    status === "confirmed"
+  );
+}
+
+function SwipeableOrderCard({
+  order,
+  onMarkReady,
+  onMarkCompleted,
+  onCancel,
+  onRegisterSwipeable,
+}: {
+  order: Order;
+  onMarkReady: () => void;
+  onMarkCompleted: () => void;
+  onCancel: () => void;
+  onRegisterSwipeable: (ref: SwipeableType | null) => void;
+}) {
+  const swipeRef = useRef<SwipeableType>(null);
+  const swipable = canMarkOrderCompleted(order.status);
+
+  const renderRightActions = (
+    _progress: Animated.AnimatedInterpolation<number>,
+    dragX: Animated.AnimatedInterpolation<number>,
+  ) => {
+    const scale = dragX.interpolate({
+      inputRange: [-100, 0],
+      outputRange: [1, 0.85],
+      extrapolate: "clamp",
+    });
+
+    return (
+      <TouchableOpacity
+        style={styles.swipeCompleteAction}
+        onPress={() => {
+          swipeRef.current?.close();
+          onMarkCompleted();
+        }}
+        activeOpacity={0.9}
+      >
+        <Animated.View style={[styles.swipeCompleteInner, { transform: [{ scale }] }]}>
+          <CheckCircle2 size={26} color={colors.white} />
+          <Text style={styles.swipeCompleteText}>Complete</Text>
+        </Animated.View>
+      </TouchableOpacity>
+    );
+  };
+
+  const card = (
+    <OrderCard
+      order={order}
+      onMarkReady={onMarkReady}
+      onCancel={onCancel}
+      swipeHint={swipable}
+    />
+  );
+
+  if (!swipable) {
+    return card;
+  }
+
+  return (
+    <Swipeable
+      ref={(ref) => {
+        swipeRef.current = ref;
+        onRegisterSwipeable(ref);
+      }}
+      renderRightActions={renderRightActions}
+      onSwipeableOpen={() => onMarkCompleted()}
+      overshootRight={false}
+      friction={2}
+      rightThreshold={56}
+      containerStyle={styles.swipeableContainer}
+    >
+      {card}
+    </Swipeable>
+  );
+}
+
 function OrderCard({
   order,
   onMarkReady,
   onCancel,
+  swipeHint,
 }: {
   order: Order;
   onMarkReady: () => void;
   onCancel: () => void;
+  swipeHint?: boolean;
 }) {
   const statusStyle = getStatusStyle(order.status);
   const itemLabel =
@@ -156,6 +244,10 @@ function OrderCard({
         <Text style={styles.phoneText}>{order.customerPhone}</Text>
       </View>
 
+      {swipeHint ? (
+        <Text style={styles.swipeHint}>Swipe left to mark as completed</Text>
+      ) : null}
+
       {order.status === "pending" && (
         <View style={styles.actionRow}>
           <TouchableOpacity
@@ -187,6 +279,12 @@ export default function OrdersScreen() {
   const [sellerProfile, setSellerProfile] = useState<SellerProfile | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterStatus>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const openSwipeableRef = useRef<SwipeableType | null>(null);
+
+  const closeOpenSwipeable = useCallback(() => {
+    openSwipeableRef.current?.close();
+    openSwipeableRef.current = null;
+  }, []);
 
   const fetchOrders = useCallback(async (sellerId: string) => {
     try {
@@ -271,6 +369,7 @@ export default function OrdersScreen() {
     if (!auth.currentUser) return;
 
     try {
+      closeOpenSwipeable();
       await orderService.updateOrderStatus(
         auth.currentUser.uid,
         orderId,
@@ -283,6 +382,26 @@ export default function OrdersScreen() {
       Alert.alert("Error", "Failed to update order");
     }
   };
+
+  const handleMarkAsCompleted = useCallback(
+    async (orderId: string) => {
+      if (!auth.currentUser) return;
+
+      try {
+        closeOpenSwipeable();
+        await orderService.updateOrderStatus(
+          auth.currentUser.uid,
+          orderId,
+          "completed",
+        );
+        await fetchOrders(auth.currentUser.uid);
+      } catch (error) {
+        console.error("Error completing order:", error);
+        Alert.alert("Error", "Failed to mark order as completed");
+      }
+    },
+    [closeOpenSwipeable, fetchOrders],
+  );
 
   const handleCancelOrder = async (orderId: string) => {
     if (!auth.currentUser) return;
@@ -328,9 +447,124 @@ export default function OrdersScreen() {
   const readyCount = getStatusCount("ready");
   const completedCount = getStatusCount("completed");
 
+  const listHeader = (
+    <>
+      <View style={styles.header}>
+        <View style={styles.headerDecor} />
+        <View style={styles.headerContent}>
+          <Text style={styles.headerTitle}>Orders</Text>
+          <Text style={styles.headerSubtitle}>
+            {orders.length} total · {pendingCount} need action
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.body}>
+        <View style={styles.searchBar}>
+          <Search size={18} color={colors.textSoft} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search customer or order ID…"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholderTextColor={colors.textSoft}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
+              <X size={18} color={colors.textSoft} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={styles.statsRow}>
+          <View style={[styles.statCard, styles.statCardPending]}>
+            <View style={[styles.statIconWrap, { backgroundColor: "#f0f0f0" }]}>
+              <Clock size={18} color={colors.text} />
+            </View>
+            <Text style={styles.statNumber}>{pendingCount}</Text>
+            <Text style={styles.statLabel}>Pending</Text>
+          </View>
+          <View style={[styles.statCard, styles.statCardReady]}>
+            <View
+              style={[styles.statIconWrap, { backgroundColor: colors.primarySoft }]}
+            >
+              <Package size={18} color={colors.primary} />
+            </View>
+            <Text style={[styles.statNumber, { color: colors.primary }]}>
+              {readyCount}
+            </Text>
+            <Text style={styles.statLabel}>Ready</Text>
+          </View>
+          <View style={[styles.statCard, styles.statCardDone]}>
+            <View
+              style={[styles.statIconWrap, { backgroundColor: colors.successSoft }]}
+            >
+              <CheckCircle2 size={18} color={colors.success} />
+            </View>
+            <Text style={[styles.statNumber, { color: colors.success }]}>
+              {completedCount}
+            </Text>
+            <Text style={styles.statLabel}>Completed</Text>
+          </View>
+        </View>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterScroll}
+        >
+          {FILTERS.map(({ key, label }) => {
+            const isActive = activeFilter === key;
+            const count =
+              key === "all"
+                ? orders.length
+                : getStatusCount(key as "pending" | "ready" | "completed");
+
+            return (
+              <TouchableOpacity
+                key={key}
+                style={[styles.filterChip, isActive && styles.filterChipActive]}
+                onPress={() => setActiveFilter(key)}
+                activeOpacity={0.85}
+              >
+                <Text
+                  style={[
+                    styles.filterChipText,
+                    isActive && styles.filterChipTextActive,
+                  ]}
+                >
+                  {label}
+                </Text>
+                {count > 0 && (
+                  <View
+                    style={[
+                      styles.filterCount,
+                      isActive && styles.filterCountActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.filterCountText,
+                        isActive && styles.filterCountTextActive,
+                      ]}
+                    >
+                      {count}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
+    </>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView
+      <FlatList
+        data={filteredOrders}
+        keyExtractor={(item) => item.id ?? item.orderId}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -339,116 +573,9 @@ export default function OrdersScreen() {
             tintColor={colors.primary}
           />
         }
-      >
-        <View style={styles.header}>
-          <View style={styles.headerDecor} />
-          <View style={styles.headerContent}>
-            <Text style={styles.headerTitle}>Orders</Text>
-            <Text style={styles.headerSubtitle}>
-              {orders.length} total · {pendingCount} need action
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.body}>
-          <View style={styles.searchBar}>
-            <Search size={18} color={colors.textSoft} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search customer or order ID…"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholderTextColor={colors.textSoft}
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={8}>
-                <X size={18} color={colors.textSoft} />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <View style={styles.statsRow}>
-            <View style={[styles.statCard, styles.statCardPending]}>
-              <View style={[styles.statIconWrap, { backgroundColor: "#f0f0f0" }]}>
-                <Clock size={18} color={colors.text} />
-              </View>
-              <Text style={styles.statNumber}>{pendingCount}</Text>
-              <Text style={styles.statLabel}>Pending</Text>
-            </View>
-            <View style={[styles.statCard, styles.statCardReady]}>
-              <View
-                style={[styles.statIconWrap, { backgroundColor: colors.primarySoft }]}
-              >
-                <Package size={18} color={colors.primary} />
-              </View>
-              <Text style={[styles.statNumber, { color: colors.primary }]}>
-                {readyCount}
-              </Text>
-              <Text style={styles.statLabel}>Ready</Text>
-            </View>
-            <View style={[styles.statCard, styles.statCardDone]}>
-              <View
-                style={[styles.statIconWrap, { backgroundColor: colors.successSoft }]}
-              >
-                <CheckCircle2 size={18} color={colors.success} />
-              </View>
-              <Text style={[styles.statNumber, { color: colors.success }]}>
-                {completedCount}
-              </Text>
-              <Text style={styles.statLabel}>Completed</Text>
-            </View>
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterScroll}
-          >
-            {FILTERS.map(({ key, label }) => {
-              const isActive = activeFilter === key;
-              const count =
-                key === "all"
-                  ? orders.length
-                  : getStatusCount(key as "pending" | "ready" | "completed");
-
-              return (
-                <TouchableOpacity
-                  key={key}
-                  style={[styles.filterChip, isActive && styles.filterChipActive]}
-                  onPress={() => setActiveFilter(key)}
-                  activeOpacity={0.85}
-                >
-                  <Text
-                    style={[
-                      styles.filterChipText,
-                      isActive && styles.filterChipTextActive,
-                    ]}
-                  >
-                    {label}
-                  </Text>
-                  {count > 0 && (
-                    <View
-                      style={[
-                        styles.filterCount,
-                        isActive && styles.filterCountActive,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.filterCountText,
-                          isActive && styles.filterCountTextActive,
-                        ]}
-                      >
-                        {count}
-                      </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-
-          {filteredOrders.length === 0 ? (
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={
+          <View style={[styles.body, styles.emptyListWrap]}>
             <View style={styles.emptyState}>
               <View style={styles.emptyIconWrap}>
                 <Package size={32} color={colors.primary} />
@@ -460,20 +587,27 @@ export default function OrdersScreen() {
                   : "New orders will show up here when customers place them"}
               </Text>
             </View>
-          ) : (
-            filteredOrders.map((order) => (
-              <OrderCard
-                key={order.id}
-                order={order}
-                onMarkReady={() => handleMarkAsReady(order.id!)}
-                onCancel={() => handleCancelOrder(order.id!)}
-              />
-            ))
-          )}
-        </View>
-
-        <View style={{ height: 100 }} />
-      </ScrollView>
+          </View>
+        }
+        renderItem={({ item }) => (
+          <View style={styles.orderListItem}>
+            <SwipeableOrderCard
+              order={item}
+              onMarkReady={() => handleMarkAsReady(item.id!)}
+              onMarkCompleted={() => handleMarkAsCompleted(item.id!)}
+              onCancel={() => handleCancelOrder(item.id!)}
+              onRegisterSwipeable={(ref) => {
+                if (ref && openSwipeableRef.current !== ref) {
+                  openSwipeableRef.current?.close();
+                  openSwipeableRef.current = ref;
+                }
+              }}
+            />
+          </View>
+        )}
+        contentContainerStyle={styles.listContent}
+        onScrollBeginDrag={closeOpenSwipeable}
+      />
     </SafeAreaView>
   );
 }
@@ -527,9 +661,48 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.8)",
     fontWeight: "500",
   },
+  listContent: {
+    paddingBottom: 100,
+  },
   body: {
     marginTop: -spacing.lg,
     paddingHorizontal: spacing.lg,
+  },
+  emptyListWrap: {
+    paddingTop: spacing.sm,
+  },
+  orderListItem: {
+    paddingHorizontal: spacing.lg,
+  },
+  swipeableContainer: {
+    marginBottom: spacing.sm,
+  },
+  swipeCompleteAction: {
+    backgroundColor: colors.success,
+    justifyContent: "center",
+    alignItems: "center",
+    width: 108,
+    marginBottom: spacing.sm,
+    borderTopRightRadius: 18,
+    borderBottomRightRadius: 18,
+  },
+  swipeCompleteInner: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+  },
+  swipeCompleteText: {
+    color: colors.white,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  swipeHint: {
+    fontSize: 12,
+    color: colors.textSoft,
+    fontWeight: "500",
+    marginBottom: spacing.sm,
+    fontStyle: "italic",
   },
   searchBar: {
     flexDirection: "row",
@@ -655,7 +828,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderRadius: 18,
     padding: spacing.md,
-    marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: "rgba(0,0,0,0.05)",
     shadowColor: "#000",

@@ -1,4 +1,5 @@
 import { Text } from "@/src/components/StyledText";
+import { FieldError } from "@/src/components/FieldError";
 import {
   fetchFoodPlaceDetails,
   formatPlaceTypeLabel,
@@ -27,6 +28,7 @@ type FoodBusinessAddressFieldProps = {
   onPlaceSelected: (place: SelectedFoodPlace | null) => void;
   disabled?: boolean;
   manualMode?: boolean;
+  error?: string;
 };
 
 export function FoodBusinessAddressField({
@@ -36,6 +38,7 @@ export function FoodBusinessAddressField({
   onPlaceSelected,
   disabled,
   manualMode,
+  error,
 }: FoodBusinessAddressFieldProps) {
   const [suggestions, setSuggestions] = useState<FoodPlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
@@ -110,7 +113,7 @@ export function FoodBusinessAddressField({
           landmark).
         </Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, error ? styles.inputError : null]}
           value={query}
           onChangeText={(text) => {
             onQueryChange(text);
@@ -120,6 +123,7 @@ export function FoodBusinessAddressField({
           placeholderTextColor={colors.textSoft}
           editable={!disabled}
         />
+        <FieldError message={error} />
       </View>
     );
   }
@@ -137,7 +141,7 @@ export function FoodBusinessAddressField({
         </Text>
       ) : null}
 
-      <View style={styles.inputRow}>
+      <View style={[styles.inputRow, error ? styles.inputRowError : null]}>
         <Search size={18} color={colors.textSoft} />
         <TextInput
           style={styles.inputFlex}
@@ -197,6 +201,7 @@ export function FoodBusinessAddressField({
           ))}
         </View>
       ) : null}
+      <FieldError message={error} />
     </View>
   );
 }
@@ -215,6 +220,12 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: spacing.md,
     backgroundColor: colors.white,
+  },
+  inputRowError: {
+    borderColor: colors.error,
+  },
+  inputError: {
+    borderColor: colors.error,
   },
   input: {
     borderWidth: 1,

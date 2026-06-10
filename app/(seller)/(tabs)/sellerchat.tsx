@@ -2,7 +2,10 @@ import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
   Conversation,
+  enrichConversationsWithBuyerNames,
   getConversations,
+  markConversationAsRead,
+  repairConversationUnreadCounts,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
 import { pushWithReturn, SELLER_ROUTES } from "@/src/utils/navigation";
@@ -103,7 +106,7 @@ function ConversationCard({
             style={[styles.lastMessage, unread && styles.lastMessageUnread]}
             numberOfLines={1}
           >
-            {isOwnLast ? "You: " : ""}
+            {isOwnLast ? "You: " : `${item.buyerName}: `}
             {item.lastMessage || "No messages yet"}
           </Text>
           {unread && (
@@ -143,7 +146,16 @@ export default function SellerChat() {
 
     try {
       const chats = await getConversations(user.uid, "seller");
-      setConversations(chats);
+      const withUnread = chats.filter((c) => (c.sellerUnreadCount || 0) > 0);
+      if (withUnread.length > 0) {
+        await Promise.all(
+          withUnread.map((c) => repairConversationUnreadCounts(c.id)),
+        );
+        const refreshed = await getConversations(user.uid, "seller");
+        setConversations(await enrichConversationsWithBuyerNames(refreshed));
+      } else {
+        setConversations(await enrichConversationsWithBuyerNames(chats));
+      }
     } catch (error) {
       console.error("Error loading conversations:", error);
       Alert.alert("Error", "Failed to load conversations");
@@ -166,6 +178,14 @@ export default function SellerChat() {
   }, [loadConversations]);
 
   const handleOpenChat = (conversationId: string) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === conversationId ? { ...c, sellerUnreadCount: 0 } : c,
+      ),
+    );
+    markConversationAsRead(conversationId, "seller").catch((error) => {
+      console.error("Error clearing unread on open:", error);
+    });
     pushWithReturn(
       router,
       "/(seller)/chat/[id]",

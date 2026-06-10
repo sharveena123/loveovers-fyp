@@ -1,5 +1,7 @@
 import InputField from "@/src/components/InputField";
 import PrimaryButton from "@/src/components/PrimaryButton";
+import { FormField } from "@/src/components/FormField";
+import { FormSubmitError } from "@/src/components/FieldError";
 import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
@@ -8,6 +10,7 @@ import {
     updateSellerProfile,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
+import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
 import { goBackToReturn, SELLER_ROUTES } from "@/src/utils/navigation";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
@@ -25,7 +28,7 @@ import {
 export default function SellerEditProfile() {
   const router = useRouter();
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const handleBack = () =>
     goBackToReturn(router, returnTo, SELLER_ROUTES.profile);
@@ -36,8 +39,11 @@ export default function SellerEditProfile() {
   const [phone, setPhone] = useState("");
   const [businessAddress, setBusinessAddress] = useState("");
   const [closingHour, setClosingHour] = useState("20");
+  const [errors, setErrors] = useState<FormErrors>({});
 
   useEffect(() => {
+    if (authLoading) return;
+
     const fetchProfile = async () => {
       try {
         if (!user?.uid) {
@@ -70,29 +76,22 @@ export default function SellerEditProfile() {
     };
 
     fetchProfile();
-  }, [user?.uid, router]);
+  }, [user?.uid, authLoading]);
 
   const handleSave = async () => {
-    if (!contactName.trim()) {
-      Alert.alert("Validation", "Please enter your contact name");
+    const nextErrors: FormErrors = {};
+    if (!contactName.trim()) nextErrors.contactName = "Please enter your contact name";
+    if (!businessName.trim()) nextErrors.businessName = "Please enter your business name";
+    if (!phone.trim()) nextErrors.phone = "Please enter your phone number";
+    if (!businessAddress.trim())
+      nextErrors.businessAddress = "Please enter your business address";
+
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
 
-    if (!businessName.trim()) {
-      Alert.alert("Validation", "Please enter your business name");
-      return;
-    }
-
-    if (!phone.trim()) {
-      Alert.alert("Validation", "Please enter your phone number");
-      return;
-    }
-
-    if (!businessAddress.trim()) {
-      Alert.alert("Validation", "Please enter your business address");
-      return;
-    }
-
+    setErrors({});
     try {
       setSaving(true);
       if (user?.uid) {
@@ -115,13 +114,13 @@ export default function SellerEditProfile() {
       }
     } catch (error) {
       console.error("Error saving profile:", error);
-      Alert.alert("Error", "Failed to save profile");
+      setErrors({ submit: "Failed to save profile. Please try again." });
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -152,45 +151,61 @@ export default function SellerEditProfile() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Business Information</Text>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Contact Name</Text>
+            <FormSubmitError message={errors.submit} />
+
+            <FormField label="Contact Name" error={errors.contactName}>
               <InputField
                 value={contactName}
-                onChangeText={setContactName}
+                onChangeText={(text) => {
+                  setContactName(text);
+                  setErrors((prev) => clearFieldError(prev, "contactName"));
+                }}
                 placeholder="Enter your contact name"
+                hasError={!!errors.contactName}
               />
-            </View>
+            </FormField>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Business Name</Text>
+            <FormField label="Business Name" error={errors.businessName}>
               <InputField
                 value={businessName}
-                onChangeText={setBusinessName}
+                onChangeText={(text) => {
+                  setBusinessName(text);
+                  setErrors((prev) => clearFieldError(prev, "businessName"));
+                }}
                 placeholder="Enter your business name"
+                hasError={!!errors.businessName}
               />
-            </View>
+            </FormField>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Phone Number</Text>
+            <FormField label="Phone Number" error={errors.phone}>
               <InputField
                 value={phone}
-                onChangeText={setPhone}
+                onChangeText={(text) => {
+                  setPhone(text);
+                  setErrors((prev) => clearFieldError(prev, "phone"));
+                }}
                 placeholder="Enter your phone number"
                 keyboardType="default"
+                hasError={!!errors.phone}
               />
-            </View>
+            </FormField>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Business Address</Text>
+            <FormField label="Business Address" error={errors.businessAddress}>
               <InputField
                 value={businessAddress}
-                onChangeText={setBusinessAddress}
+                onChangeText={(text) => {
+                  setBusinessAddress(text);
+                  setErrors((prev) => clearFieldError(prev, "businessAddress"));
+                }}
                 placeholder="Enter your business address"
+                hasError={!!errors.businessAddress}
               />
-            </View>
+            </FormField>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Smart pricing — closing hour (24h)</Text>
+            <FormField
+              label="Smart pricing — closing hour (24h)"
+              helperText="Markdown ramps in the hours before this time (12–23, local time). Used for live buyer prices and AI simulator defaults."
+            >
               <InputField
                 value={closingHour}
                 onChangeText={(t) =>
@@ -199,19 +214,13 @@ export default function SellerEditProfile() {
                 placeholder="20"
                 keyboardType="number-pad"
               />
-              <Text style={styles.helperText}>
-                Markdown ramps in the hours before this time (12–23, local time).
-                Used for live buyer prices and AI simulator defaults.
-              </Text>
-            </View>
+            </FormField>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Email</Text>
-              <View style={[styles.disabledInput]}>
+            <FormField label="Email" helperText="Email cannot be changed">
+              <View style={styles.disabledInput}>
                 <Text style={styles.disabledText}>{user?.email || "N/A"}</Text>
               </View>
-              <Text style={styles.helperText}>Email cannot be changed</Text>
-            </View>
+            </FormField>
           </View>
 
           <View style={styles.buttonContainer}>

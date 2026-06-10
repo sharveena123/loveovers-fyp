@@ -200,6 +200,21 @@ export function computeExtraMarkdownPct(input: {
   };
 }
 
+/** Original retail for discount display; handles legacy docs missing originalPrice. */
+export function resolveListingRetail(
+  item: Pick<InventoryItem, "price" | "originalPrice" | "discountedPrice">,
+  listFloor: number,
+): number {
+  if (item.originalPrice != null && item.originalPrice > listFloor) {
+    return item.originalPrice;
+  }
+  const rawPrice = item.price ?? listFloor;
+  if (rawPrice > listFloor + 0.004) {
+    return rawPrice;
+  }
+  return Math.max(listFloor * 1.15, listFloor + 0.5);
+}
+
 export function isSmartPricingEnabled(item: InventoryItem): boolean {
   if (item.smartPricingEnabled === false) return false;
   if (item.type === "bag") return item.smartPricingEnabled !== false;
@@ -229,10 +244,7 @@ export function computeLiveListingPrice(
   },
 ): LivePriceResult {
   const listFloor = item.discountedPrice ?? item.price;
-  const retail =
-    item.originalPrice != null && item.originalPrice > listFloor
-      ? item.originalPrice
-      : Math.max(listFloor * 1.15, listFloor + 0.5);
+  const retail = resolveListingRetail(item, listFloor);
   const ab = abVariantFromListingId(options.listingId, options.sellerId);
   const expiry = resolveExpiryDate(item);
   const hoursToExpiry = expiry

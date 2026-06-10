@@ -3,6 +3,8 @@ import { useAuth } from "@/src/hooks/useAuth";
 import {
   Conversation,
   getConversations,
+  markConversationAsRead,
+  repairConversationUnreadCounts,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
 import { BUYER_ROUTES, pushWithReturn } from "@/src/utils/navigation";
@@ -140,7 +142,16 @@ export default function BuyerChat() {
 
     try {
       const chats = await getConversations(user.uid, "buyer");
-      setConversations(chats);
+      const withUnread = chats.filter((c) => (c.buyerUnreadCount || 0) > 0);
+      if (withUnread.length > 0) {
+        await Promise.all(
+          withUnread.map((c) => repairConversationUnreadCounts(c.id)),
+        );
+        const refreshed = await getConversations(user.uid, "buyer");
+        setConversations(refreshed);
+      } else {
+        setConversations(chats);
+      }
     } catch (error) {
       console.error("Error loading conversations:", error);
       Alert.alert("Error", "Failed to load conversations");
@@ -163,6 +174,14 @@ export default function BuyerChat() {
   }, [loadConversations]);
 
   const handleOpenChat = (conversationId: string) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === conversationId ? { ...c, buyerUnreadCount: 0 } : c,
+      ),
+    );
+    markConversationAsRead(conversationId, "buyer").catch((error) => {
+      console.error("Error clearing unread on open:", error);
+    });
     pushWithReturn(
       router,
       "/(buyer)/chat/[id]",

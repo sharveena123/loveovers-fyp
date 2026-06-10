@@ -33,13 +33,11 @@ export type LayerBreakdown = {
 export type DatasetAssessment = {
   assessment_id: string;
   cafe_name: string;
+  created_at?: string;
   total_rows: number;
   total_columns: number;
   original_columns: string[];
   editable_mapping: EditableMappingEntry[];
-  detected_mapping: Record<string, string>;
-  llm_assisted_mapping: Record<string, string>;
-  needs_confirmation: NeedsConfirmation[];
   missing_required: string[];
   missing_optional: string[];
   data_quality_issues: string[];
@@ -52,13 +50,6 @@ export type DatasetAssessment = {
   ai_engine?: string;
 };
 
-export type NeedsConfirmation = {
-  column: string;
-  suggested_mapping: string;
-  confidence: string;
-  options: string[];
-};
-
 export type TrainingResult = {
   cafe_id: string;
   cafe_name: string;
@@ -69,33 +60,37 @@ export type TrainingResult = {
   mae: number;
   r2: number;
   cv_mae: number;
+  cv_r2: number;
+  accuracy_pct: number;
   confidence: string;
   detected_mapping: Record<string, string>;
   top_features?: Record<string, number>;
+  persisted?: boolean;
+  dataset_summary?: DatasetSummary;
   message: string;
-  model_breakdown?: {
-    xgboost: { mae: number; r2: number };
-    lightgbm: { mae: number; r2: number };
-    catboost: { mae: number; r2: number };
-    ensemble: { mae: number; r2: number };
-  };
-  best_individual?: "xgboost" | "lightgbm" | "catboost";
 };
 
 export type PredictionRequest = {
   cafe_id: string;
   item: string;
   day_of_week: DayOfWeek;
-  weather: Weather;
-  price: number;
-  discount_pct?: number;
+  price?: number;
   produced_qty?: number;
   date?: string;
+  /** Optional real recent-sales overrides — beat the DOW-aware averages. */
   sold_qty_lag_1?: number;
+  sold_qty_lag_2?: number;
+  sold_qty_lag_3?: number;
   sold_qty_lag_7?: number;
   sold_qty_lag_14?: number;
+  sold_qty_lag_21?: number;
+  sold_qty_lag_28?: number;
+  sold_qty_roll_3?: number;
   sold_qty_roll_7?: number;
+  sold_qty_roll_14?: number;
+  sold_qty_roll_30?: number;
   item_avg_sales?: number;
+  item_dow_avg?: number;
 };
 
 export type PredictionResponse = {
@@ -103,18 +98,13 @@ export type PredictionResponse = {
   cafe_name: string;
   item: string;
   day_of_week: DayOfWeek;
-  weather: Weather;
-  discount_pct: number;
-  base_predicted_sales: number;
   predicted_sales: number;
   recommended_production: number;
   produced_qty: number;
   expected_surplus: number;
   surplus_rate: number;
   price_rm: number;
-  base_revenue_rm: number;
-  discounted_revenue_rm: number;
-  revenue_impact: number;
+  revenue_rm: number;
   is_weekend: boolean;
   model_accuracy: number;
   cv_mae: number;
@@ -123,7 +113,6 @@ export type PredictionResponse = {
 
 export type BatchPredictionItem = {
   item: string;
-  base_predicted_sales: number;
   predicted_sales: number;
   recommended_production: number;
   expected_surplus: number;
@@ -133,10 +122,8 @@ export type BatchPredictionResponse = {
   cafe_id: string;
   cafe_name: string;
   day: string;
-  weather: string;
-  discount_pct: number;
+  date: string;
   predictions: BatchPredictionItem[];
-  total_base_sales: number;
   total_predicted_sales: number;
   total_recommended_production: number;
   total_expected_surplus: number;
@@ -147,12 +134,21 @@ export type CafeInfo = {
   cafe_name: string;
   items: string[];
   training_rows: number;
+  mae?: number;
   r2?: number;
   cv_mae?: number;
   model?: string;
   model_loaded?: boolean;
   dataset_summary?: DatasetSummary;
   accuracy_pct?: number;
+  trained_at?: string;
+  last_trained_at?: string;
+  dataset_days?: number;
+  manual_entries?: number;
+  detected_mapping?: Record<string, string>;
+  top_features?: Record<string, number>;
+  persisted?: boolean;
+  message?: string;
 };
 
 export type DatasetSummary = {
@@ -197,6 +193,9 @@ export type RetrainResult = {
   mae: number;
   items: string[];
   top_features?: Record<string, number>;
+  cafe_id?: string;
+  dataset_summary?: DatasetSummary;
+  message?: string;
 };
 
 export type CafeDatasetApiResponse = {
@@ -318,4 +317,20 @@ export type DatasetAnalyticsBundle = {
   heatmap: HeatmapCell[];
   funnel: FunnelStage[];
   insights: string[];
+};
+
+/** Food listing categories (must match backend classifier). */
+export type FoodCategory =
+  | "Bakery"
+  | "Pastries"
+  | "Bread"
+  | "Desserts"
+  | "Meals"
+  | "Beverages"
+  | "Other";
+
+export type ClassifyFoodResponse = {
+  foodLabel: string;
+  category: FoodCategory;
+  confidence: number;
 };

@@ -1,26 +1,29 @@
-import { colors } from '@/src/theme/styles'
-import { StyleSheet, TextInput, TextStyle } from 'react-native'
+import { inputErrorBorder } from "@/src/components/FieldError";
+import { colors } from "@/src/theme/styles";
+import { StyleSheet, TextInput, TextStyle } from "react-native";
 
 interface InputFieldProps {
-  value: string
-  onChangeText: (text: string) => void
-  placeholder?: string
-  secureTextEntry?: boolean
-  keyboardType?: 'default' | 'email-address' | 'numeric' | 'decimal-pad'
-  style?: TextStyle
+  value: string;
+  onChangeText: (text: string) => void;
+  placeholder?: string;
+  secureTextEntry?: boolean;
+  keyboardType?: "default" | "email-address" | "numeric" | "decimal-pad";
+  style?: TextStyle;
+  hasError?: boolean;
 }
 
 export default function InputField({
   value,
   onChangeText,
-  placeholder = '',
+  placeholder = "",
   secureTextEntry = false,
-  keyboardType = 'default',
+  keyboardType = "default",
   style,
+  hasError = false,
 }: InputFieldProps) {
   return (
     <TextInput
-      style={[styles.input, style]}
+      style={[styles.input, hasError && inputErrorBorder, style]}
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
@@ -30,12 +33,12 @@ export default function InputField({
       autoCapitalize="none"
       autoCorrect={false}
     />
-  )
+  );
 }
 
 const styles = StyleSheet.create({
   input: {
-    width: '100%',
+    width: "100%",
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 8,
@@ -43,6 +46,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 14,
     color: colors.text,
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
   },
-})
+});

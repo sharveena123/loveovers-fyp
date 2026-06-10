@@ -207,10 +207,6 @@ async function runTestPaymentRefundPipeline(
     refundedAmount: amount,
   });
 
-  const { createRefundProcessedNotification } = await import(
-    "./notificationServices"
-  );
-  await createRefundProcessedNotification(userId, orderId, amount);
 }
 
 export async function requestBuyerRefund(

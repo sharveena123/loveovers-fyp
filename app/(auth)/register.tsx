@@ -1,28 +1,34 @@
+import { FormSubmitError } from "@/src/components/FieldError";
+import { FormField } from "@/src/components/FormField";
 import InputField from "@/src/components/InputField";
 import PrimaryButton from "@/src/components/PrimaryButton";
 import { Text } from "@/src/components/StyledText";
 import { auth } from "@/src/services/firebase/config";
 import { createBuyerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
+import {
+    clearFieldError,
+    FormErrors
+} from "@/src/utils/formValidation";
 import { router } from "expo-router";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import {
-  ChevronLeft,
-  Eye,
-  Lock,
-  Mail,
-  Phone,
-  ShoppingBag,
-  User,
+    ChevronLeft,
+    Eye,
+    Lock,
+    Mail,
+    Phone,
+    ShoppingBag,
+    User,
 } from "lucide-react-native";
 import { useState } from "react";
 import {
-  Alert,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  View,
+    Alert,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    TouchableOpacity,
+    View,
 } from "react-native";
 
 export default function RegisterScreen() {
@@ -37,6 +43,7 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
 
   const handleRegister = async () => {
     if (userType === "seller") {
@@ -44,33 +51,34 @@ export default function RegisterScreen() {
       return;
     }
 
-    if (!contactName || !email || !phone || !password || !confirmPassword) {
-      Alert.alert("Error", "Please fill in all fields");
+    const nextErrors: FormErrors = {};
+
+    if (!contactName.trim()) nextErrors.contactName = "Full name is required";
+    if (!email.trim()) nextErrors.email = "Email is required";
+    else if (!email.includes("@"))
+      nextErrors.email = "Enter a valid email address";
+    if (!phone.trim()) nextErrors.phone = "Phone number is required";
+    if (!password) nextErrors.password = "Password is required";
+    else if (password.length < 6)
+      nextErrors.password = "Password must be at least 6 characters";
+    if (!confirmPassword)
+      nextErrors.confirmPassword = "Please confirm your password";
+    else if (password !== confirmPassword)
+      nextErrors.confirmPassword = "Passwords do not match";
+
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
 
-    if (!email.includes("@")) {
-      Alert.alert("Error", "Please enter a valid email address");
-      return;
-    }
-
-    if (password.length < 6) {
-      Alert.alert("Error", "Password must be at least 6 characters");
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      Alert.alert("Error", "Passwords do not match");
-      return;
-    }
-
+    setErrors({});
     setLoading(true);
     try {
       // Create Firebase Auth user
       const userCredential = await createUserWithEmailAndPassword(
         auth,
         email,
-        password
+        password,
       );
       const user = userCredential.user;
 
@@ -95,7 +103,7 @@ export default function RegisterScreen() {
         errorMessage = "Password is too weak";
       }
 
-      Alert.alert("Registration Failed", errorMessage);
+      setErrors({ submit: errorMessage });
     } finally {
       setLoading(false);
     }
@@ -164,23 +172,29 @@ export default function RegisterScreen() {
               </TouchableOpacity>
             </View>
 
+            <FormSubmitError message={errors.submit} />
+
             {/* Contact/Full Name */}
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>
-                {userType === "seller" ? "Contact Name" : "Full Name"}
-              </Text>
+            <FormField
+              label={userType === "seller" ? "Contact Name" : "Full Name"}
+              error={errors.contactName}
+            >
               <View style={styles.inputWrapper}>
                 <View style={styles.iconContainer}>
                   <User size={20} color={colors.textSoft} />
                 </View>
                 <InputField
                   value={contactName}
-                  onChangeText={setContactName}
+                  onChangeText={(text) => {
+                    setContactName(text);
+                    setErrors((prev) => clearFieldError(prev, "contactName"));
+                  }}
                   placeholder="John Doe"
+                  hasError={!!errors.contactName}
                   style={styles.inputWithIcon}
                 />
               </View>
-            </View>
+            </FormField>
 
             {userType === "seller" && (
               <View style={styles.sellerBanner}>
@@ -194,51 +208,60 @@ export default function RegisterScreen() {
             )}
 
             {/* Email */}
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Email Address</Text>
+            <FormField label="Email Address" error={errors.email}>
               <View style={styles.inputWrapper}>
                 <View style={styles.iconContainer}>
                   <Mail size={20} color={colors.textSoft} />
                 </View>
                 <InputField
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={(text) => {
+                    setEmail(text);
+                    setErrors((prev) => clearFieldError(prev, "email"));
+                  }}
                   placeholder="you@example.com"
                   keyboardType="email-address"
+                  hasError={!!errors.email}
                   style={styles.inputWithIcon}
                 />
               </View>
-            </View>
+            </FormField>
 
             {/* Phone */}
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Phone Number</Text>
+            <FormField label="Phone Number" error={errors.phone}>
               <View style={styles.inputWrapper}>
                 <View style={styles.iconContainer}>
                   <Phone size={20} color={colors.textSoft} />
                 </View>
                 <InputField
                   value={phone}
-                  onChangeText={setPhone}
+                  onChangeText={(text) => {
+                    setPhone(text);
+                    setErrors((prev) => clearFieldError(prev, "phone"));
+                  }}
                   placeholder=" 011 1234 5678"
                   keyboardType="numeric"
+                  hasError={!!errors.phone}
                   style={styles.inputWithIcon}
                 />
               </View>
-            </View>
+            </FormField>
 
             {/* Password */}
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Password</Text>
+            <FormField label="Password" error={errors.password}>
               <View style={styles.inputWrapper}>
                 <View style={styles.iconContainer}>
                   <Lock size={20} color={colors.textSoft} />
                 </View>
                 <InputField
                   value={password}
-                  onChangeText={setPassword}
+                  onChangeText={(text) => {
+                    setPassword(text);
+                    setErrors((prev) => clearFieldError(prev, "password"));
+                  }}
                   placeholder="At least 6 characters"
                   secureTextEntry={!showPassword}
+                  hasError={!!errors.password}
                   style={styles.inputWithIcon}
                 />
                 <TouchableOpacity
@@ -249,20 +272,25 @@ export default function RegisterScreen() {
                   <Eye size={20} color={colors.textSoft} />
                 </TouchableOpacity>
               </View>
-            </View>
+            </FormField>
 
             {/* Confirm Password */}
-            <View style={styles.inputContainer}>
-              <Text style={styles.label}>Confirm Password</Text>
+            <FormField label="Confirm Password" error={errors.confirmPassword}>
               <View style={styles.inputWrapper}>
                 <View style={styles.iconContainer}>
                   <Lock size={20} color={colors.textSoft} />
                 </View>
                 <InputField
                   value={confirmPassword}
-                  onChangeText={setConfirmPassword}
+                  onChangeText={(text) => {
+                    setConfirmPassword(text);
+                    setErrors((prev) =>
+                      clearFieldError(prev, "confirmPassword"),
+                    );
+                  }}
                   placeholder="Re-enter your password"
                   secureTextEntry={!showConfirmPassword}
+                  hasError={!!errors.confirmPassword}
                   style={styles.inputWithIcon}
                 />
                 <TouchableOpacity
@@ -273,7 +301,7 @@ export default function RegisterScreen() {
                   <Eye size={20} color={colors.textSoft} />
                 </TouchableOpacity>
               </View>
-            </View>
+            </FormField>
 
             {/* Terms */}
             <Text style={styles.terms}>

@@ -2,13 +2,13 @@ import { Text, TextInput } from "@/src/components/StyledText";
 import { colors, spacing } from "@/src/theme/styles";
 import * as DocumentPicker from "expo-document-picker";
 import {
-  Brain,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
+  ClipboardList,
   FileSpreadsheet,
-  Sparkles,
   Upload,
-  Zap,
 } from "lucide-react-native";
 import React, { useState } from "react";
 import {
@@ -18,7 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { assessDataset, trainModel } from "../../ai/api";
+import { assessDataset, trainModel, updateAssessment } from "../../ai/api";
 import { DatasetAssessment, TrainingResult } from "../../ai/types";
 
 interface UploadAndTrainScreenProps {
@@ -26,10 +26,52 @@ interface UploadAndTrainScreenProps {
 }
 
 const STEPS = [
-  { key: "upload", label: "Upload" },
-  { key: "review", label: "Review" },
-  { key: "done", label: "Done" },
+  { key: "upload", label: "Your file" },
+  { key: "review", label: "Quick check" },
+  { key: "done", label: "All set" },
 ] as const;
+
+const SETUP_GUIDE = [
+  {
+    title: "Where do I get my sales file?",
+    body: "From your cash register (POS), Excel spreadsheet, or any app that tracks daily sales. Look for Export, Reports, or Sales history.",
+  },
+  {
+    title: "What format do I need?",
+    body: "Save it as a .csv file (comma-separated). Most POS systems and Excel can export to CSV.",
+  },
+  {
+    title: "What should be inside the file?",
+    body: "At least: the date, product name, and how many you sold. How many you made each day helps too. More weeks of history = better suggestions.",
+  },
+  {
+    title: "What happens after I upload?",
+    body: "We read your file and learn your usual patterns. Then you can open Get suggestions and see how much to bake.",
+  },
+];
+
+const COLUMN_LABELS: Record<string, string> = {
+  date: "Date",
+  item: "Product name",
+  sold_qty: "How many sold",
+  produced_qty: "How many made",
+  price: "Price",
+  day_of_week: "Day of week",
+  unknown: "Skip this column",
+};
+
+/** Must match the backend's standard fields (REQUIRED_CORE + OPTIONAL_FEATURES). */
+const STANDARD_FIELD_OPTIONS = [
+  "date",
+  "item",
+  "sold_qty",
+  "produced_qty",
+  "price",
+  "day_of_week",
+  "unknown",
+];
+
+const REQUIRED_FIELDS = ["date", "item", "sold_qty"];
 
 function getStepIndex(
   step: "upload" | "assessing" | "review" | "training" | "done",
@@ -68,27 +110,46 @@ export function UploadAndTrainScreen({
   const [userCorrections, setUserCorrections] = useState<
     Record<string, string>
   >({});
+  const [showColumnDetails, setShowColumnDetails] = useState(false);
 
   const currentStepIndex = getStepIndex(step);
 
   const pickFile = async () => {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: "text/csv",
-      copyToCacheDirectory: true,
-    });
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          "text/csv",
+          "text/comma-separated-values",
+          "application/csv",
+          "application/vnd.ms-excel",
+        ],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
 
-    if (result.assets && result.assets.length > 0) {
-      setFile(result.assets[0]);
-      setStep("upload");
-      setAssessment(null);
-      setTrainingResult(null);
-      setUserCorrections({});
+      if (result.canceled) return;
+
+      if (result.assets?.length) {
+        setFile(result.assets[0]);
+        setStep("upload");
+        setAssessment(null);
+        setTrainingResult(null);
+        setUserCorrections({});
+        return;
+      }
+
+      Alert.alert("No file chosen", "Please pick your sales .csv file and try again.");
+    } catch (error) {
+      Alert.alert(
+        "Could not open files",
+        "Please try again. If it keeps failing, close and reopen the app.",
+      );
     }
   };
 
   const handleAssess = async () => {
     if (!file) {
-      Alert.alert("Error", "Please select a CSV file first");
+      Alert.alert("Choose a file first", "Pick your sales .csv file before continuing.");
       return;
     }
 
@@ -108,8 +169,19 @@ export function UploadAndTrainScreen({
         initialCorrections[entry.original_column] = entry.current_mapping;
       }
       setUserCorrections(initialCorrections);
+      setShowColumnDetails(
+        (result.layer_breakdown?.needs_confirmation || 0) > 0 ||
+          (result.missing_required || []).length > 0,
+      );
     } catch (error: unknown) {
-      Alert.alert("Assessment Failed", String(error));
+      const message = String(error);
+      const networkHint =
+        message.includes("Network request failed") ||
+        message.includes("timed out") ||
+        message.includes("Failed to connect")
+          ? "\n\nMake sure you are on the same Wi‑Fi as your shop computer and the bake planner service is running."
+          : "";
+      Alert.alert("Could not read your file", `${message}${networkHint}`);
       setStep("upload");
     } finally {
       setLoading(false);
@@ -120,19 +192,53 @@ export function UploadAndTrainScreen({
     setUserCorrections((prev) => ({ ...prev, [column]: standard }));
   };
 
+  // Usability based on the user's current (possibly edited) mappings,
+  // so fixing a column in the UI immediately unlocks training.
+  const mappedStandards = new Set(
+    Object.values(userCorrections).filter((v) => v !== "unknown"),
+  );
+  const localMissingRequired = assessment
+    ? REQUIRED_FIELDS.filter((f) => !mappedStandards.has(f))
+    : [];
+  const canTrain = !!assessment && localMissingRequired.length === 0;
+
   const handleTrain = async () => {
-    if (!assessment?.usable) {
-      Alert.alert("Cannot Train", "Please fix dataset issues first.");
+    if (!canTrain) {
+      Alert.alert("File needs a fix", "Please check the column labels below, then try again.");
       return;
     }
-    if (!assessment.assessment_id || !file) {
-      Alert.alert("Error", "No assessment ID found.");
+    if (!assessment?.assessment_id || !file) {
+      Alert.alert("Something went wrong", "Please upload your file again.");
       return;
     }
 
     try {
       setLoading(true);
       setStep("training");
+
+      // Push any column-label edits to the backend first — /train reads the
+      // mapping from the stored assessment, not from this screen.
+      const mappingChanges: Record<string, string> = {};
+      for (const entry of assessment.editable_mapping || []) {
+        const chosen = userCorrections[entry.original_column];
+        if (chosen && chosen !== entry.current_mapping) {
+          mappingChanges[entry.original_column] = chosen;
+        }
+      }
+      if (Object.keys(mappingChanges).length > 0) {
+        const updated = await updateAssessment(
+          assessment.assessment_id,
+          mappingChanges,
+        );
+        if (!updated.usable) {
+          Alert.alert(
+            "File needs a fix",
+            `Still needed: ${updated.missing_required.join(", ")}. Tap the labels to match what is in your file.`,
+          );
+          setStep("review");
+          return;
+        }
+      }
 
       const result = await trainModel(
         file.uri,
@@ -148,11 +254,11 @@ export function UploadAndTrainScreen({
       onTrainingComplete?.(result.cafe_id);
 
       Alert.alert(
-        "Training complete",
-        `Model trained for ${result.cafe_name}\nItems: ${result.items.length}\nAccuracy: ${(result.r2 * 100).toFixed(1)}%`,
+        "You are all set!",
+        `We saved your sales history for ${result.cafe_name}. You can now get bake suggestions for ${result.items.length} products.`,
       );
     } catch (error: unknown) {
-      Alert.alert("Training Failed", String(error));
+      Alert.alert("Could not save your file", String(error));
       setStep("review");
     } finally {
       setLoading(false);
@@ -166,17 +272,31 @@ export function UploadAndTrainScreen({
 
   return (
     <View style={styles.wrapper}>
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerIconWrap}>
-          <Brain size={22} color={colors.primary} />
+          <ClipboardList size={22} color={colors.primary} />
         </View>
         <View style={styles.headerText}>
-          <Text style={styles.title}>Train AI model</Text>
+          <Text style={styles.title}>Set up your bake planner</Text>
           <Text style={styles.subtitle}>
-            Upload sales data — our AI maps columns automatically
+            Upload your past sales so we can suggest how much to bake
           </Text>
         </View>
+      </View>
+
+      <View style={styles.guideCard}>
+        <Text style={styles.guideCardTitle}>Step-by-step guide</Text>
+        {SETUP_GUIDE.map((item, i) => (
+          <View key={i} style={styles.guideItem}>
+            <View style={styles.guideBullet}>
+              <Text style={styles.guideBulletText}>{i + 1}</Text>
+            </View>
+            <View style={styles.guideItemText}>
+              <Text style={styles.guideItemTitle}>{item.title}</Text>
+              <Text style={styles.guideItemBody}>{item.body}</Text>
+            </View>
+          </View>
+        ))}
       </View>
 
       {/* Step indicator */}
@@ -224,14 +344,14 @@ export function UploadAndTrainScreen({
         ))}
       </View>
 
-      {/* Step 1: Upload */}
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>1. Upload your data</Text>
+        <Text style={styles.cardTitle}>Step 5 — Upload your sales file</Text>
         <Text style={styles.cardDesc}>
-          Select a CSV file with your historical sales. Any column format works.
+          Choose the .csv file from your POS or spreadsheet. We will read it
+          automatically.
         </Text>
 
-        <Text style={styles.fieldLabel}>Cafe name (optional)</Text>
+        <Text style={styles.fieldLabel}>Shop name (optional)</Text>
         <TextInput
           style={styles.input}
           placeholder="e.g. Bean & Brew Cafe"
@@ -251,13 +371,13 @@ export function UploadAndTrainScreen({
               <Text style={styles.uploadFileName} numberOfLines={1}>
                 {file.name}
               </Text>
-              <Text style={styles.uploadChange}>Tap to change file</Text>
+              <Text style={styles.uploadChange}>Tap to choose a different file</Text>
             </>
           ) : (
             <>
               <Upload size={28} color={colors.textSoft} />
-              <Text style={styles.uploadPrompt}>Tap to select CSV file</Text>
-              <Text style={styles.uploadHint}>Supports .csv format</Text>
+              <Text style={styles.uploadPrompt}>Tap to choose your sales file</Text>
+              <Text style={styles.uploadHint}>.csv files only</Text>
             </>
           )}
         </TouchableOpacity>
@@ -273,8 +393,8 @@ export function UploadAndTrainScreen({
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
               <>
-                <Sparkles size={18} color={colors.white} />
-                <Text style={styles.primaryBtnText}>Analyze with AI</Text>
+                <ChevronRight size={18} color={colors.white} />
+                <Text style={styles.primaryBtnText}>Check my file</Text>
               </>
             )}
           </TouchableOpacity>
@@ -289,7 +409,13 @@ export function UploadAndTrainScreen({
             { borderColor: confidenceStyle.border, borderWidth: 1.5 },
           ]}
         >
-          <Text style={styles.cardTitle}>2. Review AI mapping</Text>
+          <Text style={styles.cardTitle}>Quick check</Text>
+          <Text style={styles.cardDesc}>
+            We found {assessment.total_rows} sales rows in your file
+            {canTrain
+              ? ". Everything looks ready — you can continue below."
+              : ". A few column labels need your help before we continue."}
+          </Text>
 
           <View
             style={[
@@ -298,54 +424,29 @@ export function UploadAndTrainScreen({
             ]}
           >
             <Text style={[styles.confidenceText, { color: confidenceStyle.text }]}>
-              {assessment.confidence.toUpperCase()} confidence
+              {canTrain ? "READY TO GO" : "NEEDS A QUICK FIX"}
             </Text>
           </View>
 
-          {assessment.ai_engine && (
-            <View style={styles.engineBadge}>
-              <Zap size={14} color={colors.primary} />
-              <Text style={styles.engineText}>
-                {assessment.ai_engine === "ollama"
-                  ? "Ollama (local AI)"
-                  : "Rule-based mapping"}
-              </Text>
-            </View>
-          )}
+          <TouchableOpacity
+            style={styles.detailsToggle}
+            onPress={() => setShowColumnDetails((v) => !v)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.detailsToggleText}>
+              {showColumnDetails
+                ? "Hide how we read your columns"
+                : "See how we read your columns"}
+            </Text>
+            {showColumnDetails ? (
+              <ChevronUp size={16} color={colors.primary} />
+            ) : (
+              <ChevronDown size={16} color={colors.primary} />
+            )}
+          </TouchableOpacity>
 
-          <View style={styles.layerCard}>
-            <Text style={styles.layerTitle}>How columns were mapped</Text>
-            <View style={styles.layerRow}>
-              <View style={styles.layerItem}>
-                <Text style={styles.layerNumber}>
-                  {assessment.layer_breakdown?.rule_based_mapped || 0}
-                </Text>
-                <Text style={styles.layerLabel}>Rules</Text>
-              </View>
-              <View style={styles.layerDivider} />
-              <View style={styles.layerItem}>
-                <Text style={styles.layerNumber}>
-                  {assessment.layer_breakdown?.llm_mapped || 0}
-                </Text>
-                <Text style={styles.layerLabel}>AI</Text>
-              </View>
-              <View style={styles.layerDivider} />
-              <View style={styles.layerItem}>
-                <Text style={[styles.layerNumber, { color: colors.error }]}>
-                  {assessment.layer_breakdown?.needs_confirmation || 0}
-                </Text>
-                <Text style={styles.layerLabel}>Review</Text>
-              </View>
-            </View>
-            {assessment.diagnostic ? (
-              <Text style={styles.diagnosticText}>{assessment.diagnostic}</Text>
-            ) : null}
-          </View>
-
-          <Text style={styles.sectionLabel}>Column mappings</Text>
-          <Text style={styles.editHint}>Tap a chip to change the mapping</Text>
-
-          {editableMapping.map((entry) => {
+          {showColumnDetails &&
+            editableMapping.map((entry) => {
             const currentValue =
               userCorrections[entry.original_column] || entry.current_mapping;
             const isModified =
@@ -363,39 +464,20 @@ export function UploadAndTrainScreen({
                   isModified && styles.mappingCardModified,
                 ]}
               >
-                <View style={styles.mappingHeader}>
-                  <Text style={styles.mappingColumn}>{entry.original_column}</Text>
-                  <View style={styles.sourcePill}>
-                    <Text style={styles.sourcePillText}>
-                      {entry.source === "llm"
-                        ? "AI"
-                        : entry.source === "rule"
-                          ? "Rule"
-                          : "Manual"}
-                    </Text>
-                  </View>
-                </View>
+                <Text style={styles.mappingColumn}>
+                  Your column: {entry.original_column}
+                </Text>
                 <Text style={styles.mappingMapsTo}>
-                  Maps to{" "}
-                  <Text style={styles.mappingValue}>{currentValue}</Text>
+                  We read this as{" "}
+                  <Text style={styles.mappingValue}>
+                    {COLUMN_LABELS[currentValue] || currentValue}
+                  </Text>
                   {isModified ? (
-                    <Text style={styles.modifiedTag}> · edited</Text>
+                    <Text style={styles.modifiedTag}> · changed by you</Text>
                   ) : null}
                 </Text>
                 <View style={styles.optionsRow}>
-                  {(
-                    entry.options || [
-                      "date",
-                      "item",
-                      "sold_qty",
-                      "produced_qty",
-                      "price",
-                      "discount_pct",
-                      "weather",
-                      "day_of_week",
-                      "unknown",
-                    ]
-                  ).map((option) => (
+                  {(entry.options || STANDARD_FIELD_OPTIONS).map((option) => (
                     <TouchableOpacity
                       key={option}
                       style={[
@@ -412,7 +494,7 @@ export function UploadAndTrainScreen({
                           currentValue === option && styles.optionChipTextSelected,
                         ]}
                       >
-                        {option}
+                        {COLUMN_LABELS[option] || option}
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -423,7 +505,7 @@ export function UploadAndTrainScreen({
 
           {(assessment.data_quality_issues || []).length > 0 && (
             <View style={styles.alertBox}>
-              <Text style={styles.alertTitle}>Data quality issues</Text>
+              <Text style={styles.alertTitle}>Please check your file</Text>
               {(assessment.data_quality_issues || []).map((issue, i) => (
                 <Text key={i} style={styles.alertItem}>
                   · {issue}
@@ -434,7 +516,7 @@ export function UploadAndTrainScreen({
 
           {(assessment.suggestions || []).length > 0 && (
             <View style={styles.tipBox}>
-              <Text style={styles.tipTitle}>Suggestions</Text>
+              <Text style={styles.tipTitle}>Helpful tips</Text>
               {(assessment.suggestions || []).map((s, i) => (
                 <Text key={i} style={styles.tipItem}>
                   · {s}
@@ -443,13 +525,13 @@ export function UploadAndTrainScreen({
             </View>
           )}
 
-          {(assessment.missing_required || []).length > 0 && (
+          {localMissingRequired.length > 0 && (
             <View style={styles.warningBox}>
               <Text style={styles.warningText}>
-                Missing required: {(assessment.missing_required || []).join(", ")}
+                Still needed: {localMissingRequired.join(", ")}
               </Text>
               <Text style={styles.warningSub}>
-                Map these columns above before training.
+                Tap the labels above to match what is in your file.
               </Text>
             </View>
           )}
@@ -457,11 +539,11 @@ export function UploadAndTrainScreen({
           <TouchableOpacity
             style={[
               styles.primaryBtn,
-              !assessment.usable && styles.btnDisabled,
+              !canTrain && styles.btnDisabled,
               loading && styles.btnDisabled,
             ]}
             onPress={handleTrain}
-            disabled={!assessment.usable || loading}
+            disabled={!canTrain || loading}
             activeOpacity={0.88}
           >
             {loading && step === "training" ? (
@@ -470,7 +552,9 @@ export function UploadAndTrainScreen({
               <>
                 <ChevronRight size={18} color={colors.white} />
                 <Text style={styles.primaryBtnText}>
-                  {assessment.usable ? "Train model" : "Fix mappings to train"}
+                  {canTrain
+                    ? "Save and get bake suggestions"
+                    : "Fix columns first"}
                 </Text>
               </>
             )}
@@ -486,7 +570,7 @@ export function UploadAndTrainScreen({
               <CheckCircle2 size={28} color={colors.success} />
             </View>
             <View>
-              <Text style={styles.successTitle}>Model ready!</Text>
+              <Text style={styles.successTitle}>You are all set!</Text>
               <Text style={styles.successSubtitle}>
                 {trainingResult.cafe_name}
               </Text>
@@ -496,21 +580,15 @@ export function UploadAndTrainScreen({
           <View style={styles.statRow}>
             <View style={styles.statBox}>
               <Text style={styles.statValue}>{trainingResult.rows_used}</Text>
-              <Text style={styles.statLabel}>Rows trained</Text>
+              <Text style={styles.statLabel}>Sales rows saved</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={styles.statValue}>{trainingResult.items.length}</Text>
-              <Text style={styles.statLabel}>Menu items</Text>
-            </View>
-            <View style={styles.statBox}>
-              <Text style={[styles.statValue, { color: colors.success }]}>
-                {(trainingResult.r2 * 100).toFixed(1)}%
-              </Text>
-              <Text style={styles.statLabel}>Accuracy</Text>
+              <Text style={styles.statLabel}>Products found</Text>
             </View>
           </View>
 
-          <Text style={styles.sectionLabel}>Detected menu items</Text>
+          <Text style={styles.sectionLabel}>Products we found in your file</Text>
           <View style={styles.itemsWrap}>
             {trainingResult.items.map((item) => (
               <View key={item} style={styles.itemChip}>
@@ -519,8 +597,16 @@ export function UploadAndTrainScreen({
             ))}
           </View>
 
+          <Text style={styles.statsFooter}>
+            {(
+              trainingResult.accuracy_pct ??
+              Math.max(0, trainingResult.r2) * 100
+            ).toFixed(1)}
+            % accuracy · based on {trainingResult.rows_used} sales rows
+          </Text>
+
           <Text style={styles.readyNote}>
-            You can now run predictions on your dashboard below.
+            Scroll down to Get suggestions and see how much to bake.
           </Text>
         </View>
       )}
@@ -569,6 +655,64 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textSoft,
     lineHeight: 18,
+  },
+  guideCard: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  guideCardTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  guideItem: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  guideBullet: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guideBulletText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  guideItemText: {
+    flex: 1,
+  },
+  guideItemTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 2,
+  },
+  guideItemBody: {
+    fontSize: 12,
+    color: colors.textSoft,
+    lineHeight: 17,
+  },
+  detailsToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  detailsToggleText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.primary,
   },
   stepIndicator: {
     flexDirection: "row",
@@ -1003,6 +1147,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: colors.text,
+  },
+  statsFooter: {
+    fontSize: 11,
+    color: colors.textSoft,
+    textAlign: "center",
+    marginBottom: spacing.sm,
   },
   readyNote: {
     fontSize: 13,

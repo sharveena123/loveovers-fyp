@@ -1,28 +1,17 @@
-import { Text, TextInput } from "@/src/components/StyledText";
+import { Text } from "@/src/components/StyledText";
 import { colors, spacing } from "@/src/theme/styles";
-import {
-  BarChart3,
-  Cloud,
-  CloudRain,
-  RefreshCw,
-  Sparkles,
-  Sun,
-  TrendingDown,
-  TrendingUp,
-} from "lucide-react-native";
+import { BarChart3, ClipboardList, RefreshCw, Sparkles } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
-  Switch,
   TouchableOpacity,
   View,
 } from "react-native";
 import { batchPredict, getCafeInfo, predictForCafe } from "../../ai/api";
-import { PredictionResponse } from "../../ai/types";
-import { suggestedSimulatorDiscountPct } from "@/src/services/pricing/dynamicPricing";
+import { BatchPredictionResponse, PredictionResponse } from "../../ai/types";
 import { DailySalesEntryScreen } from "./DailySalesEntryScreen";
 
 const DAYS = [
@@ -35,15 +24,14 @@ const DAYS = [
   "Sunday",
 ];
 
-const WEATHERS = [
-  { label: "Sunny", value: "Sunny", icon: Sun },
-  { label: "Cloudy", value: "Cloudy", icon: Cloud },
-  { label: "Rainy", value: "Rainy", icon: CloudRain },
+const HOW_TO_USE = [
+  "Choose what you are baking and which day you are preparing for.",
+  "Tap Get suggestion for one item, or Whole menu for everything at once.",
+  "Use the numbers as a starting point — bake a little more if you never want to run out.",
 ];
 
 interface PredictionScreenProps {
   cafeId: string;
-  /** Used for auto discount % in predict / daily-sales (matches seller closing hour). */
   simulatorClosingHour?: number;
   onModelNotFound?: () => void;
   onRetrain?: () => void;
@@ -60,31 +48,14 @@ export function PredictionScreen({
   const [activeTab, setActiveTab] = useState<AiTab>("predict");
   const [cafeName, setCafeName] = useState("");
   const [cafeItems, setCafeItems] = useState<string[]>([]);
-
+  const [trainingRows, setTrainingRows] = useState(0);
+  const [accuracyPct, setAccuracyPct] = useState<number | null>(null);
   const [selectedItem, setSelectedItem] = useState("");
   const [selectedDay, setSelectedDay] = useState("Saturday");
-  const [selectedWeather, setSelectedWeather] = useState("Sunny");
-  const [price, setPrice] = useState("");
-
-  const [useDiscount, setUseDiscount] = useState(true);
-  const [discount, setDiscount] = useState(() =>
-    String(suggestedSimulatorDiscountPct(new Date(), simulatorClosingHour)),
-  );
-
   const [result, setResult] = useState<PredictionResponse | null>(null);
-  const [batchResult, setBatchResult] = useState<{
-    day: string;
-    discount_pct: number;
-    predictions: {
-      item: string;
-      predicted_sales: number;
-      base_predicted_sales: number;
-      recommended_production: number;
-      expected_surplus: number;
-    }[];
-    total_recommended_production: number;
-    total_expected_surplus: number;
-  } | null>(null);
+  const [batchResult, setBatchResult] = useState<BatchPredictionResponse | null>(
+    null,
+  );
   const [loading, setLoading] = useState(false);
   const [loadingCafe, setLoadingCafe] = useState(true);
 
@@ -95,12 +66,6 @@ export function PredictionScreen({
     loadCafeInfo();
   }, [cafeId]);
 
-  useEffect(() => {
-    setDiscount(
-      String(suggestedSimulatorDiscountPct(new Date(), simulatorClosingHour)),
-    );
-  }, [simulatorClosingHour]);
-
   const loadCafeInfo = async () => {
     if (!cafeId) {
       setLoadingCafe(false);
@@ -110,21 +75,28 @@ export function PredictionScreen({
       const info = (await getCafeInfo(cafeId)) as {
         cafe_name: string;
         items: string[];
+        training_rows?: number;
+        r2?: number;
+        accuracy_pct?: number;
       };
       setCafeName(info.cafe_name);
       setCafeItems(info.items);
+      setTrainingRows(info.training_rows ?? 0);
+      setAccuracyPct(
+        info.accuracy_pct ?? (info.r2 != null ? info.r2 * 100 : null),
+      );
       if (info.items.length > 0) setSelectedItem(info.items[0]);
     } catch (error: unknown) {
       const err = error as { message?: string; status?: number };
       if (err?.message?.includes("404") || err?.status === 404) {
         Alert.alert(
-          "Model not found",
-          "The trained model was not found. Please re-train your model.",
+          "Sales file needed",
+          "We could not find your sales history. Please upload your sales file again.",
           [{ text: "OK" }],
         );
         onModelNotFound?.();
       } else {
-        Alert.alert("Error", `Failed to load cafe info: ${String(error)}`);
+        Alert.alert("Could not load", "Please try again in a moment.");
       }
     } finally {
       setLoadingCafe(false);
@@ -133,25 +105,21 @@ export function PredictionScreen({
 
   const handlePredict = async () => {
     if (!cafeId) {
-      Alert.alert("No cafe", "Please upload and train your data first.");
+      Alert.alert("Upload sales file first", "Add your past sales file before getting bake suggestions.");
       return;
     }
 
     try {
       setLoading(true);
       setBatchResult(null);
-      const discountPct = useDiscount ? Number(discount) : 0;
       const response = await predictForCafe({
         cafe_id: cafeId,
         item: selectedItem,
         day_of_week: selectedDay as "Monday",
-        weather: selectedWeather as "Sunny",
-        price: Number(price) || 0,
-        discount_pct: discountPct,
       });
       setResult(response);
     } catch (error) {
-      Alert.alert("Prediction failed", String(error));
+      Alert.alert("Could not get suggestion", String(error));
     } finally {
       setLoading(false);
     }
@@ -159,23 +127,17 @@ export function PredictionScreen({
 
   const handleBatchPredict = async () => {
     if (!cafeId) {
-      Alert.alert("No cafe", "Please upload and train your data first.");
+      Alert.alert("Upload sales file first", "Add your past sales file before getting bake suggestions.");
       return;
     }
 
     try {
       setLoading(true);
       setResult(null);
-      const discountPct = useDiscount ? Number(discount) : 0;
-      const response = await batchPredict(
-        cafeId,
-        selectedDay as "Monday",
-        selectedWeather as "Sunny",
-        discountPct,
-      );
+      const response = await batchPredict(cafeId, selectedDay as "Monday");
       setBatchResult(response);
     } catch (error) {
-      Alert.alert("Batch failed", String(error));
+      Alert.alert("Could not get menu plan", String(error));
     } finally {
       setLoading(false);
     }
@@ -185,14 +147,13 @@ export function PredictionScreen({
     return (
       <View style={styles.loadingWrap}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>Loading model data…</Text>
+        <Text style={styles.loadingText}>Loading your bake planner…</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.wrapper}>
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.headerIconWrap}>
@@ -203,7 +164,9 @@ export function PredictionScreen({
               {cafeName}
             </Text>
             <Text style={styles.headerSubtitle}>
-              {activeTab === "predict" ? "Surplus prediction" : "Daily sales log"}
+              {activeTab === "predict"
+                ? "How much should I bake?"
+                : "Record what you sold today"}
             </Text>
           </View>
         </View>
@@ -213,7 +176,7 @@ export function PredictionScreen({
           activeOpacity={0.85}
         >
           <RefreshCw size={16} color={colors.primary} />
-          <Text style={styles.retrainText}>Re-upload</Text>
+          <Text style={styles.retrainText}>Change file</Text>
         </TouchableOpacity>
       </View>
 
@@ -228,7 +191,7 @@ export function PredictionScreen({
               activeTab === "predict" && styles.tabTextActive,
             ]}
           >
-            Predict
+            Get suggestions
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -254,327 +217,171 @@ export function PredictionScreen({
         />
       ) : (
         <>
-      {/* Item selector */}
-      <Text style={styles.fieldLabel}>Item</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipScroll}
-      >
-        {cafeItems.map((item) => (
-          <TouchableOpacity
-            key={item}
-            style={[styles.chip, selectedItem === item && styles.chipActive]}
-            onPress={() => setSelectedItem(item)}
-            activeOpacity={0.85}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                selectedItem === item && styles.chipTextActive,
-              ]}
-            >
-              {item}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Day */}
-      <Text style={styles.fieldLabel}>Day</Text>
-      <View style={styles.chipWrap}>
-        {DAYS.map((day) => (
-          <TouchableOpacity
-            key={day}
-            style={[styles.dayChip, selectedDay === day && styles.chipActive]}
-            onPress={() => setSelectedDay(day)}
-            activeOpacity={0.85}
-          >
-            <Text
-              style={[
-                styles.dayChipText,
-                selectedDay === day && styles.chipTextActive,
-              ]}
-            >
-              {day.slice(0, 3)}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Weather */}
-      <Text style={styles.fieldLabel}>Weather</Text>
-      <View style={styles.weatherRow}>
-        {WEATHERS.map((w) => {
-          const Icon = w.icon;
-          const active = selectedWeather === w.value;
-          return (
-            <TouchableOpacity
-              key={w.value}
-              style={[styles.weatherChip, active && styles.weatherChipActive]}
-              onPress={() => setSelectedWeather(w.value)}
-              activeOpacity={0.85}
-            >
-              <Icon size={18} color={active ? colors.white : colors.textSoft} />
-              <Text
-                style={[
-                  styles.weatherText,
-                  active && styles.weatherTextActive,
-                ]}
-              >
-                {w.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* Price */}
-      <Text style={styles.fieldLabel}>Price (RM)</Text>
-      <TextInput
-        style={styles.input}
-        value={price}
-        onChangeText={setPrice}
-        keyboardType="decimal-pad"
-        placeholder="6.50"
-        placeholderTextColor={colors.textSoft}
-      />
-
-      {/* Discount */}
-      <View style={styles.discountCard}>
-        <View style={styles.discountHeader}>
-          <View style={styles.discountHeaderText}>
-            <Text style={styles.discountTitle}>Smart discount (simulator)</Text>
-            <Text style={styles.discountDesc}>
-              Auto from time-of-day vs your closing hour — turn off to type a
-              custom % for this run only.
-            </Text>
-          </View>
-          <Switch
-            value={useDiscount}
-            onValueChange={setUseDiscount}
-            trackColor={{ false: colors.border, true: colors.primary }}
-            thumbColor="#fff"
-          />
-        </View>
-        {useDiscount && (
-          <View style={styles.discountBody}>
-            <TextInput
-              style={styles.input}
-              value={discount}
-              onChangeText={setDiscount}
-              keyboardType="numeric"
-              placeholder="10"
-              placeholderTextColor={colors.textSoft}
-            />
-            <Text style={styles.discountHint}>
-              {discount}% off (smart default — edit if needed)
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* Actions */}
-      <View style={styles.actionRow}>
-        <TouchableOpacity
-          style={[styles.predictBtn, loading && styles.btnDisabled]}
-          onPress={handlePredict}
-          disabled={loading}
-          activeOpacity={0.88}
-        >
-          {loading && !batchResult ? (
-            <ActivityIndicator color={colors.white} size="small" />
-          ) : (
-            <Text style={styles.predictBtnText}>Predict item</Text>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.batchBtn, loading && styles.btnDisabled]}
-          onPress={handleBatchPredict}
-          disabled={loading}
-          activeOpacity={0.88}
-        >
-          <BarChart3 size={18} color={colors.primary} />
-          <Text style={styles.batchBtnText}>Full day</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Single result */}
-      {result && (
-        <View style={styles.resultCard}>
-          <View style={styles.resultHeader}>
-            <Text style={styles.resultItemName}>{result.item}</Text>
-            <Text style={styles.resultMeta}>
-              {result.day_of_week} · {result.weather} · RM{result.price_rm}
-            </Text>
-          </View>
-
-          <View style={styles.comparisonCard}>
-            <View style={styles.comparisonCol}>
-              <Text style={styles.comparisonLabel}>Natural demand</Text>
-              <Text style={styles.comparisonValue}>
-                {result.base_predicted_sales}
-              </Text>
-              <Text style={styles.comparisonSub}>no discount</Text>
+          <View style={styles.guideCard}>
+            <View style={styles.guideHeader}>
+              <ClipboardList size={18} color={colors.primary} />
+              <Text style={styles.guideTitle}>How to use this</Text>
             </View>
-            {result.discount_pct > 0 && (
-              <>
-                <Text style={styles.comparisonArrow}>→</Text>
-                <View style={[styles.comparisonCol, styles.comparisonColHighlight]}>
-                  <Text style={styles.comparisonLabel}>
-                    {result.discount_pct}% off
-                  </Text>
-                  <Text style={[styles.comparisonValue, { color: colors.success }]}>
-                    {result.predicted_sales}
-                  </Text>
-                  <Text style={styles.comparisonSub}>
-                    +{result.predicted_sales - result.base_predicted_sales} sales
-                  </Text>
-                </View>
-              </>
-            )}
-          </View>
-
-          <View style={styles.metricsRow}>
-            <View style={styles.metricBox}>
-              <Text style={styles.metricValue}>
-                {result.recommended_production}
-              </Text>
-              <Text style={styles.metricLabel}>Recommended bake</Text>
-            </View>
-            <View style={styles.metricDivider} />
-            <View style={styles.metricBox}>
-              <Text
-                style={[
-                  styles.metricValue,
-                  {
-                    color:
-                      result.expected_surplus > 8 ? colors.error : colors.success,
-                  },
-                ]}
-              >
-                {result.expected_surplus}
-              </Text>
-              <Text style={styles.metricLabel}>Expected surplus</Text>
-            </View>
-          </View>
-
-          {result.discount_pct > 0 && (
-            <View style={styles.revenueCard}>
-              <Text style={styles.revenueTitle}>Revenue impact</Text>
-              <View style={styles.revenueRow}>
-                <Text style={styles.revenueBase}>
-                  Base: RM {result.base_revenue_rm}
-                </Text>
-                <Text style={styles.revenueDiscounted}>
-                  Discounted: RM {result.discounted_revenue_rm}
-                </Text>
+            {HOW_TO_USE.map((line, i) => (
+              <View key={i} style={styles.guideRow}>
+                <Text style={styles.guideStep}>{i + 1}.</Text>
+                <Text style={styles.guideText}>{line}</Text>
               </View>
-              <View
-                style={[
-                  styles.impactBadge,
-                  {
-                    backgroundColor:
-                      result.revenue_impact >= 0
-                        ? colors.successSoft
-                        : colors.errorSoft,
-                  },
-                ]}
+            ))}
+          </View>
+
+          <Text style={styles.fieldLabel}>What are you baking?</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipScroll}
+          >
+            {cafeItems.map((item) => (
+              <TouchableOpacity
+                key={item}
+                style={[styles.chip, selectedItem === item && styles.chipActive]}
+                onPress={() => setSelectedItem(item)}
+                activeOpacity={0.85}
               >
-                {result.revenue_impact >= 0 ? (
-                  <TrendingUp size={14} color={colors.success} />
-                ) : (
-                  <TrendingDown size={14} color={colors.error} />
-                )}
                 <Text
                   style={[
-                    styles.impactText,
-                    {
-                      color:
-                        result.revenue_impact >= 0
-                          ? colors.success
-                          : colors.error,
-                    },
+                    styles.chipText,
+                    selectedItem === item && styles.chipTextActive,
                   ]}
                 >
-                  RM {result.revenue_impact > 0 ? "+" : ""}
-                  {result.revenue_impact}
+                  {item}
                 </Text>
-              </View>
-            </View>
-          )}
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
 
-          {result.surplus_rate > 15 && (
-            <View style={styles.warningBox}>
-              <Text style={styles.warningText}>
-                High surplus rate ({result.surplus_rate}%) — consider a mystery
-                bag discount to reduce waste.
+          <Text style={styles.fieldLabel}>Which day?</Text>
+          <View style={styles.chipWrap}>
+            {DAYS.map((day) => (
+              <TouchableOpacity
+                key={day}
+                style={[styles.dayChip, selectedDay === day && styles.chipActive]}
+                onPress={() => setSelectedDay(day)}
+                activeOpacity={0.85}
+              >
+                <Text
+                  style={[
+                    styles.dayChipText,
+                    selectedDay === day && styles.chipTextActive,
+                  ]}
+                >
+                  {day.slice(0, 3)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <View style={styles.actionRow}>
+            <TouchableOpacity
+              style={[styles.predictBtn, loading && styles.btnDisabled]}
+              onPress={handlePredict}
+              disabled={loading}
+              activeOpacity={0.88}
+            >
+              {loading && !batchResult ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <Text style={styles.predictBtnText}>Get suggestion</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.batchBtn, loading && styles.btnDisabled]}
+              onPress={handleBatchPredict}
+              disabled={loading}
+              activeOpacity={0.88}
+            >
+              <BarChart3 size={18} color={colors.primary} />
+              <Text style={styles.batchBtnText}>Whole menu</Text>
+            </TouchableOpacity>
+          </View>
+
+          {result && (
+            <View style={styles.resultCard}>
+              <Text style={styles.resultTitle}>
+                {result.item} · {result.day_of_week}
+              </Text>
+              <Text style={styles.resultLead}>
+                Based on your past sales, here is a simple plan for the day.
+              </Text>
+
+              <View style={styles.planRow}>
+                <View style={styles.planBox}>
+                  <Text style={styles.planNumber}>{result.predicted_sales}</Text>
+                  <Text style={styles.planLabel}>Likely to sell</Text>
+                </View>
+                <Text style={styles.planArrow}>→</Text>
+                <View style={[styles.planBox, styles.planBoxHighlight]}>
+                  <Text style={[styles.planNumber, styles.planNumberHighlight]}>
+                    {result.recommended_production}
+                  </Text>
+                  <Text style={styles.planLabel}>Bake this many</Text>
+                </View>
+              </View>
+
+              {result.expected_surplus > 0 && (
+                <View style={styles.leftoverBox}>
+                  <Text style={styles.leftoverText}>
+                    About {result.expected_surplus} may be left over — list them
+                    as mystery bags near closing time to reduce waste.
+                  </Text>
+                </View>
+              )}
+
+              <Text style={styles.statsFooter}>
+                {(result.model_accuracy * 100).toFixed(1)}% accuracy · based on{" "}
+                {result.training_size} sales rows
               </Text>
             </View>
           )}
 
-          <Text style={styles.modelInfo}>
-            {(result.model_accuracy * 100).toFixed(1)}% accuracy · trained on{" "}
-            {result.training_size} records
-          </Text>
-        </View>
-      )}
+          {batchResult && (
+            <View style={styles.resultCard}>
+              <Text style={styles.resultTitle}>
+                Whole menu · {batchResult.day}
+              </Text>
+              <Text style={styles.resultLead}>
+                Suggested amounts for each item on this day.
+              </Text>
 
-      {/* Batch result */}
-      {batchResult && (
-        <View style={styles.resultCard}>
-          <Text style={styles.batchTitle}>
-            Full day plan · {batchResult.day}
-            {batchResult.discount_pct > 0
-              ? ` (${batchResult.discount_pct}% off)`
-              : ""}
-          </Text>
-
-          {batchResult.predictions.map((item, idx) => (
-              <View key={idx} style={styles.batchItem}>
-                <View style={styles.batchItemHeader}>
+              {batchResult.predictions.map((item, idx) => (
+                <View key={idx} style={styles.batchItem}>
                   <Text style={styles.batchItemName}>{item.item}</Text>
-                  <View style={styles.surplusPill}>
-                    <Text style={styles.surplusPillText}>
-                      Surplus {item.expected_surplus}
+                  <Text style={styles.batchItemPlan}>
+                    Bake {item.recommended_production} · expect to sell around{" "}
+                    {item.predicted_sales}
+                  </Text>
+                  {item.expected_surplus > 0 ? (
+                    <Text style={styles.batchItemLeftover}>
+                      ~{item.expected_surplus} may be left over
                     </Text>
-                  </View>
+                  ) : null}
                 </View>
-                <View style={styles.batchBar}>
-                  <View
-                    style={[
-                      styles.batchBarSales,
-                      { flex: item.predicted_sales || 0.1 },
-                    ]}
-                  />
-                  <View
-                    style={[
-                      styles.batchBarSurplus,
-                      { flex: item.expected_surplus || 0.1 },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.batchItemStats}>
-                  Bake {item.recommended_production} → sell ~{item.predicted_sales}
-                  {batchResult.discount_pct > 0 &&
-                    ` (base: ${item.base_predicted_sales})`}
+              ))}
+
+              <View style={styles.batchTotal}>
+                <Text style={styles.batchTotalText}>
+                  Total to bake: {batchResult.total_recommended_production}
+                </Text>
+                <Text style={styles.batchTotalSub}>
+                  Expected sales: {batchResult.total_predicted_sales}
                 </Text>
               </View>
-          ))}
 
-          <View style={styles.batchTotal}>
-            <Text style={styles.batchTotalText}>
-              Total bake: {batchResult.total_recommended_production}
-            </Text>
-            <Text style={styles.batchTotalSub}>
-              Total surplus: {batchResult.total_expected_surplus}
-            </Text>
-          </View>
-        </View>
-      )}
+              {accuracyPct != null && trainingRows > 0 ? (
+                <Text style={styles.statsFooter}>
+                  {accuracyPct.toFixed(1)}% accuracy · based on {trainingRows}{" "}
+                  sales rows
+                </Text>
+              ) : null}
+            </View>
+          )}
         </>
       )}
-
     </View>
   );
 }
@@ -653,7 +460,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderRadius: 12,
     padding: 4,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
   },
@@ -674,14 +481,48 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: colors.white,
   },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.textSoft,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+  guideCard: {
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  guideHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     marginBottom: spacing.sm,
-    marginTop: spacing.sm,
+  },
+  guideTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  guideRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: 6,
+  },
+  guideStep: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.primary,
+    width: 18,
+  },
+  guideText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textSoft,
+    lineHeight: 19,
+  },
+  fieldLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.sm,
+    marginTop: spacing.xs,
   },
   chipScroll: {
     gap: spacing.sm,
@@ -727,88 +568,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.textSoft,
   },
-  weatherRow: {
-    flexDirection: "row",
-    gap: spacing.sm,
-  },
-  weatherChip: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  weatherChipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  weatherText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: colors.textSoft,
-  },
-  weatherTextActive: {
-    color: colors.white,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: colors.text,
-    backgroundColor: colors.white,
-  },
-  discountCard: {
-    backgroundColor: colors.primarySoft,
-    borderRadius: 14,
-    padding: spacing.md,
-    marginTop: spacing.md,
-    borderWidth: 1,
-    borderColor: "rgba(106, 60, 0, 0.1)",
-    overflow: "hidden",
-  },
-  discountHeader: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.sm,
-  },
-  discountHeaderText: {
-    flex: 1,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  discountTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.primary,
-    marginBottom: 2,
-  },
-  discountDesc: {
-    fontSize: 12,
-    color: colors.textSoft,
-    lineHeight: 17,
-    flexShrink: 1,
-  },
-  discountBody: {
-    marginTop: spacing.sm,
-  },
-  discountHint: {
-    fontSize: 12,
-    color: colors.textSoft,
-    marginTop: 6,
-    fontStyle: "italic",
-  },
   actionRow: {
     flexDirection: "row",
     gap: spacing.sm,
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
     marginBottom: spacing.md,
   },
   predictBtn: {
@@ -853,213 +616,94 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     borderWidth: 1,
     borderColor: "rgba(106, 60, 0, 0.12)",
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
   },
-  resultHeader: {
-    marginBottom: spacing.md,
-    paddingBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  resultItemName: {
-    fontSize: 18,
+  resultTitle: {
+    fontSize: 17,
     fontWeight: "800",
     color: colors.text,
-    marginBottom: 2,
+    marginBottom: 4,
   },
-  resultMeta: {
+  resultLead: {
     fontSize: 13,
     color: colors.textSoft,
+    lineHeight: 19,
+    marginBottom: spacing.md,
   },
-  comparisonCard: {
+  planRow: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.background,
     borderRadius: 12,
     padding: spacing.md,
-    marginBottom: spacing.md,
   },
-  comparisonCol: {
+  planBox: {
     flex: 1,
     alignItems: "center",
   },
-  comparisonColHighlight: {
-    backgroundColor: colors.successSoft,
+  planBoxHighlight: {
+    backgroundColor: colors.primarySoft,
     borderRadius: 10,
-    padding: spacing.sm,
+    paddingVertical: spacing.sm,
   },
-  comparisonLabel: {
-    fontSize: 11,
-    color: colors.textSoft,
-    fontWeight: "600",
-    marginBottom: 4,
-    textAlign: "center",
-  },
-  comparisonValue: {
+  planNumber: {
     fontSize: 28,
     fontWeight: "800",
     color: colors.text,
-    letterSpacing: -0.5,
   },
-  comparisonSub: {
-    fontSize: 10,
+  planNumberHighlight: {
+    color: colors.primary,
+  },
+  planLabel: {
+    fontSize: 12,
     color: colors.textSoft,
-    marginTop: 2,
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 4,
   },
-  comparisonArrow: {
-    fontSize: 20,
+  planArrow: {
+    fontSize: 18,
     color: colors.primary,
     fontWeight: "700",
     marginHorizontal: 4,
   },
-  metricsRow: {
-    flexDirection: "row",
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  metricBox: {
-    flex: 1,
-    alignItems: "center",
-  },
-  metricDivider: {
-    width: 1,
-    backgroundColor: colors.border,
-    marginVertical: 4,
-  },
-  metricValue: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: colors.text,
-    marginBottom: 2,
-  },
-  metricLabel: {
-    fontSize: 11,
-    color: colors.textSoft,
-    fontWeight: "500",
-    textAlign: "center",
-  },
-  revenueCard: {
-    backgroundColor: colors.successSoft,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginBottom: spacing.md,
-  },
-  revenueTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.success,
-    marginBottom: spacing.sm,
-  },
-  revenueRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: spacing.sm,
-  },
-  revenueBase: {
-    fontSize: 12,
-    color: colors.textSoft,
-  },
-  revenueDiscounted: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: colors.text,
-  },
-  impactBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  impactText: {
-    fontSize: 15,
-    fontWeight: "800",
-  },
-  warningBox: {
+  leftoverBox: {
+    marginTop: spacing.md,
     backgroundColor: colors.errorSoft,
-    padding: spacing.sm,
     borderRadius: 10,
-    marginBottom: spacing.sm,
+    padding: spacing.sm,
   },
-  warningText: {
+  leftoverText: {
     fontSize: 12,
     color: colors.error,
     lineHeight: 18,
-    fontWeight: "500",
-  },
-  modelInfo: {
-    fontSize: 11,
-    color: colors.textSoft,
-    textAlign: "center",
-  },
-  batchTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: colors.text,
-    marginBottom: spacing.md,
   },
   batchItem: {
-    marginBottom: spacing.md,
-    paddingBottom: spacing.sm,
+    paddingVertical: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-  },
-  batchItemHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: spacing.sm,
   },
   batchItemName: {
     fontSize: 14,
     fontWeight: "700",
     color: colors.text,
-    flex: 1,
+    marginBottom: 2,
   },
-  surplusPill: {
-    backgroundColor: colors.errorSoft,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+  batchItemPlan: {
+    fontSize: 13,
+    color: colors.text,
   },
-  surplusPillText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: colors.error,
-  },
-  batchBar: {
-    flexDirection: "row",
-    height: 8,
-    borderRadius: 4,
-    overflow: "hidden",
-    marginBottom: 6,
-  },
-  batchBarSales: {
-    backgroundColor: colors.primary,
-  },
-  batchBarSurplus: {
-    backgroundColor: colors.error,
-  },
-  batchItemStats: {
-    fontSize: 11,
+  batchItemLeftover: {
+    fontSize: 12,
     color: colors.textSoft,
+    marginTop: 2,
   },
   batchTotal: {
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
     paddingTop: spacing.sm,
-    borderTopWidth: 2,
-    borderTopColor: colors.primary,
     alignItems: "center",
   },
   batchTotalText: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: "800",
     color: colors.text,
   },
@@ -1067,5 +711,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.textSoft,
     marginTop: 2,
+  },
+  statsFooter: {
+    fontSize: 11,
+    color: colors.textSoft,
+    textAlign: "center",
+    marginTop: spacing.md,
   },
 });

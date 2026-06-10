@@ -1,5 +1,7 @@
 import InputField from "@/src/components/InputField";
 import PrimaryButton from "@/src/components/PrimaryButton";
+import { FormField } from "@/src/components/FormField";
+import { FormSubmitError } from "@/src/components/FieldError";
 import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
@@ -8,6 +10,7 @@ import {
     updateBuyerProfile,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
+import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
 import { BUYER_ROUTES, goBackToReturn } from "@/src/utils/navigation";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
@@ -25,7 +28,7 @@ import {
 export default function BuyerEditProfile() {
   const router = useRouter();
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const handleBack = () =>
     goBackToReturn(router, returnTo, BUYER_ROUTES.profile);
@@ -33,8 +36,11 @@ export default function BuyerEditProfile() {
   const [saving, setSaving] = useState(false);
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
+  const [errors, setErrors] = useState<FormErrors>({});
 
   useEffect(() => {
+    if (authLoading) return;
+
     const fetchProfile = async () => {
       try {
         if (!user?.uid) {
@@ -58,19 +64,19 @@ export default function BuyerEditProfile() {
     };
 
     fetchProfile();
-  }, [user?.uid, router]);
+  }, [user?.uid, authLoading]);
 
   const handleSave = async () => {
-    if (!fullName.trim()) {
-      Alert.alert("Validation", "Please enter your full name");
+    const nextErrors: FormErrors = {};
+    if (!fullName.trim()) nextErrors.fullName = "Please enter your full name";
+    if (!phone.trim()) nextErrors.phone = "Please enter your phone number";
+
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
 
-    if (!phone.trim()) {
-      Alert.alert("Validation", "Please enter your phone number");
-      return;
-    }
-
+    setErrors({});
     try {
       setSaving(true);
       if (user?.uid) {
@@ -87,13 +93,13 @@ export default function BuyerEditProfile() {
       }
     } catch (error) {
       console.error("Error saving profile:", error);
-      Alert.alert("Error", "Failed to save profile");
+      setErrors({ submit: "Failed to save profile. Please try again." });
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -124,32 +130,41 @@ export default function BuyerEditProfile() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Personal Information</Text>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Full Name</Text>
+            <FormSubmitError message={errors.submit} />
+
+            <FormField label="Full Name" error={errors.fullName}>
               <InputField
                 value={fullName}
-                onChangeText={setFullName}
+                onChangeText={(text) => {
+                  setFullName(text);
+                  setErrors((prev) => clearFieldError(prev, "fullName"));
+                }}
                 placeholder="Enter your full name"
+                hasError={!!errors.fullName}
               />
-            </View>
+            </FormField>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Phone Number</Text>
+            <FormField label="Phone Number" error={errors.phone}>
               <InputField
                 value={phone}
-                onChangeText={setPhone}
+                onChangeText={(text) => {
+                  setPhone(text);
+                  setErrors((prev) => clearFieldError(prev, "phone"));
+                }}
                 placeholder="Enter your phone number"
                 keyboardType="default"
+                hasError={!!errors.phone}
               />
-            </View>
+            </FormField>
 
-            <View style={styles.formGroup}>
-              <Text style={styles.label}>Email</Text>
-              <View style={[styles.disabledInput]}>
+            <FormField
+              label="Email"
+              helperText="Email cannot be changed"
+            >
+              <View style={styles.disabledInput}>
                 <Text style={styles.disabledText}>{user?.email || "N/A"}</Text>
               </View>
-              <Text style={styles.helperText}>Email cannot be changed</Text>
-            </View>
+            </FormField>
           </View>
 
           <View style={styles.buttonContainer}>

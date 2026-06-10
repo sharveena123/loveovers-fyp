@@ -5,13 +5,13 @@ import {
   getAvailableBags,
 } from "@/src/services/firebase/buyerInventory";
 import { addToCart } from "@/src/services/firebase/cartServices";
-import { createConversation } from "@/src/services/firebase/messagingServices";
 import {
-  BuyerProfile,
-  getUserProfile,
-} from "@/src/services/firebase/user";
+  createConversation,
+  getBuyerDisplayNameForUser,
+} from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
 import { getPreferredLocation } from "@/src/utils/locationPreference";
+import { resolveBuyerPriceDisplay } from "@/src/utils/listingPrices";
 import { BUYER_ROUTES, goBackToReturn, pushWithReturn } from "@/src/utils/navigation";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -48,11 +48,6 @@ import {
 const DEFAULT_LAT = 3.139;
 const DEFAULT_LNG = 101.6869;
 const IMAGE_HEIGHT = 360;
-
-function calcDiscount(original: number, discounted: number) {
-  if (original <= 0) return 0;
-  return Math.round(((original - discounted) / original) * 100);
-}
 
 function getLeftCount(item: AvailableBag) {
   return Math.max(0, item.quantity - (item.sold || 0));
@@ -114,8 +109,8 @@ export default function MysteryBagDetail() {
         name: bag.name || "",
         sellerName: bag.sellerName || "",
         sellerId: bag.sellerId || "",
-        price: bag.discountedPrice || bag.price || 0,
-        originalPrice: bag.originalPrice,
+        price: resolveBuyerPriceDisplay(bag).salePrice,
+        originalPrice: resolveBuyerPriceDisplay(bag).retail,
         quantity: selectedQuantity,
         imageUrl: bag.imageUrl,
         type: "bag",
@@ -162,15 +157,10 @@ export default function MysteryBagDetail() {
 
     try {
       setContacting(true);
-      let buyerName = user.displayName || "Buyer";
-      try {
-        const profile = await getUserProfile(user.uid);
-        if (profile && (profile as BuyerProfile).fullName) {
-          buyerName = (profile as BuyerProfile).fullName;
-        }
-      } catch {
-        /* use fallback name */
-      }
+      const buyerName = await getBuyerDisplayNameForUser(
+        user.uid,
+        user.displayName,
+      );
 
       const convId = await createConversation(
         user.uid,
@@ -222,10 +212,12 @@ export default function MysteryBagDetail() {
     );
   }
 
-  const price = bag.discountedPrice || bag.price;
-  const original = bag.originalPrice || bag.price;
-  const worthUpTo = original * 2;
-  const discount = calcDiscount(worthUpTo, price);
+  const prices = resolveBuyerPriceDisplay(bag);
+  const price = prices.salePrice;
+  const original = prices.retail;
+  const worthUpTo = original;
+  const discount = prices.discountPct;
+  const compareAt = prices.compareAtPrice;
   const leftCount = getLeftCount(bag);
   const soldOut = leftCount === 0;
 

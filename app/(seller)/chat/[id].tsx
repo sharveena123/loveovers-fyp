@@ -2,16 +2,18 @@ import { Text, TextInput } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
   getConversation,
+  markConversationAsRead,
   Message,
   QUICK_MESSAGES,
+  resolveBuyerDisplayName,
   sendMessage,
   subscribeToMessages,
 } from "@/src/services/firebase/messagingServices";
 import { colors, spacing } from "@/src/theme/styles";
 import { goBackToReturn, SELLER_ROUTES } from "@/src/utils/navigation";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { ArrowLeft, Send, Zap } from "lucide-react-native";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -35,10 +37,14 @@ function getInitials(name: string) {
 
 export default function SellerChatDetail() {
   const router = useRouter();
-  const { id, returnTo } = useLocalSearchParams<{
+  const params = useLocalSearchParams<{
     id: string;
     returnTo?: string;
   }>();
+  const id = Array.isArray(params.id) ? params.id[0] : params.id;
+  const returnTo = Array.isArray(params.returnTo)
+    ? params.returnTo[0]
+    : params.returnTo;
 
   const handleBack = () =>
     goBackToReturn(router, returnTo, SELLER_ROUTES.chat);
@@ -65,8 +71,15 @@ export default function SellerChatDetail() {
     const loadConversation = async () => {
       try {
         const conv = await getConversation(id);
-        if (isMounted) {
-          setConversation(conv);
+        if (isMounted && conv) {
+          const buyerName = await resolveBuyerDisplayName(
+            conv.buyerId,
+            conv.buyerName,
+          );
+          setConversation({ ...conv, buyerName });
+          setLoading(false);
+        } else if (isMounted) {
+          setConversation(null);
           setLoading(false);
         }
       } catch (error) {
@@ -88,6 +101,31 @@ export default function SellerChatDetail() {
       if (unsubscribe) unsubscribe();
     };
   }, [id]);
+
+  const clearUnread = useCallback(async () => {
+    if (!id || !user) return;
+    try {
+      await markConversationAsRead(id, "seller");
+    } catch (error) {
+      console.error("Error clearing unread count:", error);
+    }
+  }, [id, user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      clearUnread();
+    }, [clearUnread]),
+  );
+
+  useEffect(() => {
+    if (!id || !user) return;
+    const hasUnreadFromBuyer = messages.some(
+      (m) => m.sendersRole === "buyer" && m.read !== true,
+    );
+    if (hasUnreadFromBuyer) {
+      clearUnread();
+    }
+  }, [id, user, messages, clearUnread]);
 
   const handleSendMessage = async (text: string, isQuick = false) => {
     if (!text.trim() || !user || !id) return;
@@ -145,7 +183,7 @@ export default function SellerChatDetail() {
     );
   }
 
-  const otherUserName = conversation?.buyerName || "Buyer";
+  const otherUserName = conversation?.buyerName || "Customer";
   const quickMsgs = QUICK_MESSAGES.seller;
 
   return (
@@ -196,6 +234,9 @@ export default function SellerChatDetail() {
               <View
                 style={[styles.messageRow, isOwn && styles.messageRowOwn]}
               >
+                {!isOwn ? (
+                  <Text style={styles.senderLabel}>{otherUserName}</Text>
+                ) : null}
                 <View
                   style={[
                     styles.bubble,
@@ -411,11 +452,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   messageRow: {
-    flexDirection: "row",
+    alignItems: "flex-start",
     marginBottom: spacing.sm,
+    maxWidth: "85%",
   },
   messageRowOwn: {
-    justifyContent: "flex-end",
+    alignSelf: "flex-end",
+    alignItems: "flex-end",
+  },
+  senderLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textSoft,
+    marginBottom: 4,
+    marginLeft: 4,
   },
   bubble: {
     maxWidth: "78%",

@@ -14,7 +14,6 @@ import { signOut } from "firebase/auth";
 import {
   AlertCircle,
   BarChart3,
-  Bell,
   ChevronRight,
   Clock,
   CreditCard,
@@ -154,13 +153,10 @@ export default function ProfileScreen() {
     setRefreshing(false);
   }, [loadProfile]);
 
-  const handleToggleSetting = async (
-    setting: "notifications" | "lowStockAlerts",
-  ) => {
+  const handleToggleSetting = async (setting: "lowStockAlerts") => {
     if (!auth.currentUser || !profile) return;
 
     const currentSettings = profile.settings || {
-      notifications: true,
       lowStockAlerts: true,
     };
 
@@ -361,22 +357,6 @@ export default function ProfileScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Settings</Text>
             <View style={styles.card}>
-              <MenuRow
-                icon={<Bell size={20} color={colors.primary} />}
-                iconBg={colors.primarySoft}
-                title="Notifications"
-                subtitle="Order alerts and updates"
-                showChevron={false}
-                rightElement={
-                  <Switch
-                    value={profile.settings?.notifications ?? true}
-                    onValueChange={() => handleToggleSetting("notifications")}
-                    trackColor={{ false: colors.border, true: colors.primary }}
-                    thumbColor="#fff"
-                  />
-                }
-              />
-              <View style={styles.divider} />
               <MenuRow
                 icon={<AlertCircle size={20} color={colors.primary} />}
                 iconBg={colors.primarySoft}

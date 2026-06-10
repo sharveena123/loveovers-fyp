@@ -124,8 +124,7 @@ function OrderRefundCard({
         </TouchableOpacity>
       ) : refund === "requested" || refund === "processing" ? (
         <Text style={styles.hintText}>
-          We&apos;re reviewing your refund. You&apos;ll get a notification when
-          it&apos;s processed.
+          We&apos;re reviewing your refund. Check back here for updates.
         </Text>
       ) : refund === "refunded" ? (
         <Text style={styles.hintSuccess}>

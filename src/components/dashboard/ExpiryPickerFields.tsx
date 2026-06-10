@@ -1,4 +1,5 @@
 import { Text } from "@/src/components/StyledText";
+import { FieldError } from "@/src/components/FieldError";
 import { colors, spacing } from "@/src/theme/styles";
 import {
   formatDisplayDate,
@@ -97,7 +98,7 @@ export function ExpiryPickerFields({
         </View>
       </View>
 
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      <FieldError message={error} />
       {hint && !error ? <Text style={styles.hint}>{hint}</Text> : null}
 
       {showDatePicker && Platform.OS === "ios" ? (
@@ -251,11 +252,6 @@ const styles = StyleSheet.create({
   hint: {
     fontSize: 12,
     color: colors.textSoft,
-    marginTop: spacing.xs,
-  },
-  errorText: {
-    fontSize: 12,
-    color: colors.error,
     marginTop: spacing.xs,
   },
 });

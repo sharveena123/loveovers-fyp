@@ -63,10 +63,12 @@ export default function BuyerLayout() {
         }}
       />
       <Tabs.Screen
-        name="buyerprofile"
+        name="buyerorders"
         options={{
-          title: "Profile",
-          tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
+          title: "Orders",
+          tabBarIcon: ({ color, size }) => (
+            <Package color={color} size={size} />
+          ),
         }}
       />
       <Tabs.Screen
@@ -93,12 +95,10 @@ export default function BuyerLayout() {
         }}
       />
       <Tabs.Screen
-        name="buyerorders"
+        name="buyerprofile"
         options={{
-          title: "Orders",
-          tabBarIcon: ({ color, size }) => (
-            <Package color={color} size={size} />
-          ),
+          title: "Profile",
+          tabBarIcon: ({ color, size }) => <User color={color} size={size} />,
         }}
       />
       <Tabs.Screen

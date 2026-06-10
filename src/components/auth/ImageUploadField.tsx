@@ -1,4 +1,5 @@
 import { Text } from "@/src/components/StyledText";
+import { FieldError } from "@/src/components/FieldError";
 import { colors, spacing } from "@/src/theme/styles";
 import * as ImagePicker from "expo-image-picker";
 import { ImagePlus, X } from "lucide-react-native";
@@ -17,6 +18,7 @@ type ImageUploadFieldProps = {
   uri: string | null;
   onChange: (uri: string | null) => void;
   required?: boolean;
+  error?: string;
 };
 
 export function ImageUploadField({
@@ -25,6 +27,7 @@ export function ImageUploadField({
   uri,
   onChange,
   required,
+  error,
 }: ImageUploadFieldProps) {
   const pick = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -50,7 +53,11 @@ export function ImageUploadField({
         {required ? " *" : ""}
       </Text>
       {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-      <TouchableOpacity style={styles.box} onPress={pick} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={[styles.box, error ? styles.boxError : null]}
+        onPress={pick}
+        activeOpacity={0.85}
+      >
         {uri ? (
           <>
             <Image source={{ uri }} style={styles.image} />
@@ -68,6 +75,7 @@ export function ImageUploadField({
           </>
         )}
       </TouchableOpacity>
+      <FieldError message={error} />
     </View>
   );
 }
@@ -79,6 +87,7 @@ type MultiImageUploadFieldProps = {
   onChange: (uris: string[]) => void;
   max?: number;
   required?: boolean;
+  error?: string;
 };
 
 export function MultiImageUploadField({
@@ -88,6 +97,7 @@ export function MultiImageUploadField({
   onChange,
   max = 3,
   required,
+  error,
 }: MultiImageUploadFieldProps) {
   const pick = async () => {
     if (uris.length >= max) {
@@ -140,6 +150,7 @@ export function MultiImageUploadField({
           </TouchableOpacity>
         ) : null}
       </View>
+      <FieldError message={error} />
     </View>
   );
 }
@@ -169,6 +180,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
     backgroundColor: colors.white,
+  },
+  boxError: {
+    borderColor: colors.error,
   },
   image: {
     width: "100%",

@@ -4,6 +4,7 @@ import { Poppins_600SemiBold, useFonts } from "@expo-google-fonts/poppins";
 import { StripeProvider } from "@stripe/stripe-react-native";
 import { Stack } from "expo-router";
 import { useEffect } from "react";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 const STRIPE_PUBLISHABLE_KEY =
   process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY || "";
@@ -21,15 +22,17 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider>
-      <StripeProvider publishableKey={STRIPE_PUBLISHABLE_KEY}>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="(auth)" />
-          <Stack.Screen name="(seller)" />
-          <Stack.Screen name="(buyer)" />
-        </Stack>
-      </StripeProvider>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <StripeProvider publishableKey={STRIPE_PUBLISHABLE_KEY}>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen name="(auth)" />
+            <Stack.Screen name="(seller)" />
+            <Stack.Screen name="(buyer)" />
+          </Stack>
+        </StripeProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }

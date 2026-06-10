@@ -19,6 +19,7 @@ import {
   getRecentLocations,
   savePreferredLocation,
 } from "@/src/utils/locationPreference";
+import { resolveBuyerPriceDisplay } from "@/src/utils/listingPrices";
 import Constants from "expo-constants";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
@@ -98,15 +99,11 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: "discount", label: "Top discount" },
 ];
 
-const getDiscountPct = (bag: AvailableBag) => {
-  const original = bag.originalPrice || bag.price;
-  const discounted = bag.discountedPrice || bag.price;
-  if (original <= 0) return 0;
-  return Math.round(((original - discounted) / original) * 100);
-};
-
 const getBagPrice = (bag: AvailableBag) =>
-  bag.discountedPrice ?? bag.price ?? 0;
+  resolveBuyerPriceDisplay(bag).salePrice;
+
+const getDiscountPct = (bag: AvailableBag) =>
+  resolveBuyerPriceDisplay(bag).discountPct;
 
 const matchesPriceRange = (bag: AvailableBag, range: PriceRangeKey) => {
   const price = getBagPrice(bag);
@@ -722,7 +719,8 @@ export default function BuyerHome() {
 
   const renderBagCard = (bag: AvailableBag, index: number, compact = false) => {
     const leftCount = getLeftCount(bag);
-    const discount = getDiscountPct(bag);
+    const prices = resolveBuyerPriceDisplay(bag);
+    const discount = prices.discountPct;
     const lat = Number(bag.latitude);
     const lng = Number(bag.longitude);
     const computedDistance =
@@ -766,7 +764,7 @@ export default function BuyerHome() {
           </Text>
           <View style={styles.compactFooter}>
             <Text style={styles.compactPrice}>
-              RM {(bag.discountedPrice || bag.price).toFixed(2)}
+              RM {prices.salePrice.toFixed(2)}
             </Text>
             <View style={styles.compactUrgent}>
               <Flame size={11} color={colors.error} />
@@ -852,14 +850,13 @@ export default function BuyerHome() {
           <View style={styles.bagFooter}>
             <View>
               <Text style={styles.price}>
-                RM {(bag.discountedPrice || bag.price).toFixed(2)}
+                RM {prices.salePrice.toFixed(2)}
               </Text>
-              {bag.originalPrice &&
-                bag.originalPrice > (bag.discountedPrice || bag.price) && (
-                  <Text style={styles.originalPrice}>
-                    RM {bag.originalPrice.toFixed(2)}
-                  </Text>
-                )}
+              {prices.compareAtPrice != null && (
+                <Text style={styles.originalPrice}>
+                  RM {prices.compareAtPrice.toFixed(2)}
+                </Text>
+              )}
             </View>
             <View style={styles.reserveHint}>
               <Text style={styles.reserveHintText}>View deal</Text>

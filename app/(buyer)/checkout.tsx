@@ -1,17 +1,22 @@
 import { Text } from "@/src/components/StyledText";
+import { FieldError, FormSubmitError, inputErrorBorder } from "@/src/components/FieldError";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
   CartItem,
   getUserCart,
   removeFromCart,
 } from "@/src/services/firebase/cartServices";
-import { createConversation } from "@/src/services/firebase/messagingServices";
+import {
+  createConversation,
+  getBuyerDisplayNameForUser,
+} from "@/src/services/firebase/messagingServices";
 import { createOrderFromCart } from "@/src/services/firebase/orders";
 import {
   BuyerProfile,
   getUserProfile,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
+import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
 import { CardField } from "@stripe/stripe-react-native";
 import { BUYER_ROUTES, goBackToReturn, pushWithReturn } from "@/src/utils/navigation";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -103,6 +108,8 @@ export default function Checkout() {
     pickupLocation: "",
     pickupTime: "",
   });
+  const [pickupErrors, setPickupErrors] = useState<FormErrors>({});
+  const [paymentError, setPaymentError] = useState("");
 
   const pickupLocations = useMemo(
     () =>
@@ -189,30 +196,21 @@ export default function Checkout() {
 
   const handlePickupChange = (field: keyof PickupForm, value: string) => {
     setPickupForm((prev) => ({ ...prev, [field]: value }));
+    setPickupErrors((prev) => clearFieldError(prev, field));
   };
 
   const validatePickupForm = (): boolean => {
-    if (!pickupForm.fullName.trim()) {
-      Alert.alert("Required", "Please enter your full name");
-      return false;
-    }
-    if (!pickupForm.email.trim()) {
-      Alert.alert("Required", "Please enter your email");
-      return false;
-    }
-    if (!pickupForm.phone.trim()) {
-      Alert.alert("Required", "Please enter your phone number");
-      return false;
-    }
-    if (!pickupForm.pickupLocation.trim()) {
-      Alert.alert("Required", "Please select a pickup café");
-      return false;
-    }
-    if (!pickupForm.pickupTime.trim()) {
-      Alert.alert("Required", "Please select a pickup time");
-      return false;
-    }
-    return true;
+    const next: FormErrors = {};
+    if (!pickupForm.fullName.trim())
+      next.fullName = "Please enter your full name";
+    if (!pickupForm.email.trim()) next.email = "Please enter your email";
+    if (!pickupForm.phone.trim()) next.phone = "Please enter your phone number";
+    if (!pickupForm.pickupLocation.trim())
+      next.pickupLocation = "Please select a pickup café";
+    if (!pickupForm.pickupTime.trim())
+      next.pickupTime = "Please select a pickup time";
+    setPickupErrors(next);
+    return Object.keys(next).length === 0;
   };
 
   const handleProceedToPayment = () => {
@@ -224,10 +222,11 @@ export default function Checkout() {
 
   const handlePayment = async () => {
     if (!user) {
-      Alert.alert("Error", "User not authenticated");
+      setPaymentError("Please log in to complete checkout");
       return;
     }
 
+    setPaymentError("");
     try {
       setProcessing(true);
       const subtotal = calculateSubtotal();
@@ -275,7 +274,7 @@ export default function Checkout() {
       setCurrentStep("confirmation");
     } catch (orderError) {
       console.error("Error creating order:", orderError);
-      Alert.alert("Error", "Failed to create order. Please contact support.");
+      setPaymentError("Failed to create order. Please contact support.");
     } finally {
       setProcessing(false);
     }
@@ -384,6 +383,7 @@ export default function Checkout() {
               form={pickupForm}
               onFormChange={handlePickupChange}
               pickupLocations={pickupLocations}
+              errors={pickupErrors}
             />
           )}
           {currentStep === "payment" && (
@@ -392,6 +392,7 @@ export default function Checkout() {
               discount={discount}
               total={total}
               pickupForm={pickupForm}
+              error={paymentError}
             />
           )}
           {currentStep === "confirmation" && (
@@ -586,15 +587,10 @@ function ReviewStep({
     }
 
     try {
-      let buyerName = user.displayName || "Buyer";
-      try {
-        const profile = await getUserProfile(user.uid);
-        if (profile && (profile as BuyerProfile).fullName) {
-          buyerName = (profile as BuyerProfile).fullName;
-        }
-      } catch {
-        /* fallback */
-      }
+      const buyerName = await getBuyerDisplayNameForUser(
+        user.uid,
+        user.displayName,
+      );
 
       const conversationId = await createConversation(
         user.uid,
@@ -708,10 +704,12 @@ function PickupStep({
   form,
   onFormChange,
   pickupLocations,
+  errors,
 }: {
   form: PickupForm;
   onFormChange: (field: keyof PickupForm, value: string) => void;
   pickupLocations: string[];
+  errors: FormErrors;
 }) {
   return (
     <View style={styles.stepContent}>
@@ -735,6 +733,7 @@ function PickupStep({
           placeholder="Your full name"
           value={form.fullName}
           onChangeText={(t) => onFormChange("fullName", t)}
+          error={errors.fullName}
         />
         <FormField
           label="Email"
@@ -744,6 +743,7 @@ function PickupStep({
           onChangeText={(t) => onFormChange("email", t)}
           keyboardType="email-address"
           autoCapitalize="none"
+          error={errors.email}
         />
         <FormField
           label="Phone"
@@ -752,6 +752,7 @@ function PickupStep({
           value={form.phone}
           onChangeText={(t) => onFormChange("phone", t)}
           keyboardType="phone-pad"
+          error={errors.phone}
         />
       </View>
 
@@ -768,31 +769,35 @@ function PickupStep({
             placeholder="Enter café name or address"
             value={form.pickupLocation}
             onChangeText={(t) => onFormChange("pickupLocation", t)}
+            error={errors.pickupLocation}
           />
         ) : (
-          <View style={styles.chipGrid}>
-            {pickupLocations.map((location) => {
-              const selected = form.pickupLocation === location;
-              return (
-                <TouchableOpacity
-                  key={location}
-                  style={[styles.chip, selected && styles.chipActive]}
-                  onPress={() => onFormChange("pickupLocation", location)}
-                >
-                  <MapPin
-                    size={14}
-                    color={selected ? colors.white : colors.primary}
-                  />
-                  <Text
-                    style={[styles.chipText, selected && styles.chipTextActive]}
-                    numberOfLines={2}
+          <>
+            <View style={styles.chipGrid}>
+              {pickupLocations.map((location) => {
+                const selected = form.pickupLocation === location;
+                return (
+                  <TouchableOpacity
+                    key={location}
+                    style={[styles.chip, selected && styles.chipActive]}
+                    onPress={() => onFormChange("pickupLocation", location)}
                   >
-                    {location}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+                    <MapPin
+                      size={14}
+                      color={selected ? colors.white : colors.primary}
+                    />
+                    <Text
+                      style={[styles.chipText, selected && styles.chipTextActive]}
+                      numberOfLines={2}
+                    >
+                      {location}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <FieldError message={errors.pickupLocation} />
+          </>
         )}
       </View>
 
@@ -822,6 +827,7 @@ function PickupStep({
             );
           })}
         </View>
+        <FieldError message={errors.pickupTime} />
       </View>
     </View>
   );
@@ -832,14 +838,17 @@ function PaymentStep({
   discount,
   total,
   pickupForm,
+  error,
 }: {
   subtotal: number;
   discount: number;
   total: number;
   pickupForm: PickupForm;
+  error?: string;
 }) {
   return (
     <View style={styles.stepContent}>
+      <FormSubmitError message={error} />
       <View style={styles.pickupRecap}>
         <MapPin size={16} color={colors.primary} />
         <View style={styles.pickupRecapText}>
@@ -988,6 +997,7 @@ function FormField({
   onChangeText,
   keyboardType = "default",
   autoCapitalize,
+  error,
 }: {
   label: string;
   icon: ReactNode;
@@ -996,11 +1006,12 @@ function FormField({
   onChangeText: (text: string) => void;
   keyboardType?: "default" | "email-address" | "phone-pad";
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  error?: string;
 }) {
   return (
     <View style={styles.fieldGroup}>
       <Text style={styles.fieldLabel}>{label}</Text>
-      <View style={styles.fieldInput}>
+      <View style={[styles.fieldInput, error ? inputErrorBorder : null]}>
         {icon}
         <TextInput
           style={styles.fieldText}
@@ -1012,6 +1023,7 @@ function FormField({
           placeholderTextColor={colors.textSoft}
         />
       </View>
+      <FieldError message={error} />
     </View>
   );
 }

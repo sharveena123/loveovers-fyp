@@ -5,16 +5,13 @@ import { BuyerStats, getBuyerStats } from "@/src/services/firebase/buyerStats";
 import { auth } from "@/src/services/firebase/config";
 import {
   BuyerProfile as BuyerProfileType,
-  getBuyerPreferences,
   getUserProfile,
-  updateBuyerPreferences,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
 import { formatCo2, formatMeals } from "@/src/utils/impactMetrics";
 import { BUYER_ROUTES, pushWithReturn } from "@/src/utils/navigation";
 import { router, useFocusEffect } from "expo-router";
 import {
-  Bell,
   ChevronRight,
   CreditCard,
   Edit2,
@@ -41,7 +38,6 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Switch,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -126,7 +122,6 @@ export default function BuyerProfile() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [profile, setProfile] = useState<BuyerProfileType | null>(null);
   const [stats, setStats] = useState<BuyerStats | null>(null);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [totalPaid, setTotalPaid] = useState(0);
   const [totalRefunded, setTotalRefunded] = useState(0);
   const [pendingRefunds, setPendingRefunds] = useState(0);
@@ -139,10 +134,9 @@ export default function BuyerProfile() {
     }
 
     try {
-      const [userProfile, buyerStats, prefs, transactions] = await Promise.all([
+      const [userProfile, buyerStats, transactions] = await Promise.all([
         getUserProfile(uid),
         getBuyerStats(uid),
-        getBuyerPreferences(uid),
         getBuyerTransactions(uid),
       ]);
 
@@ -150,7 +144,6 @@ export default function BuyerProfile() {
         setProfile(userProfile as BuyerProfileType);
       }
       setStats(buyerStats);
-      setNotificationsEnabled(prefs?.pushNotifications ?? true);
 
       let paid = 0;
       let refunded = 0;
@@ -192,20 +185,6 @@ export default function BuyerProfile() {
     await loadProfile();
     setRefreshing(false);
   }, [loadProfile]);
-
-  const handleNotificationToggle = async (value: boolean) => {
-    const uid = user?.uid ?? auth.currentUser?.uid;
-    if (!uid) return;
-
-    try {
-      setNotificationsEnabled(value);
-      await updateBuyerPreferences(uid, { pushNotifications: value });
-    } catch (error) {
-      console.error("Error updating preferences:", error);
-      Alert.alert("Error", "Failed to update notification settings");
-      setNotificationsEnabled(!value);
-    }
-  };
 
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -455,22 +434,6 @@ export default function BuyerProfile() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Account</Text>
             <View style={styles.card}>
-              <MenuRow
-                icon={<Bell size={20} color={colors.primary} />}
-                iconBg={colors.primarySoft}
-                title="Push notifications"
-                subtitle="Order updates & nearby deals"
-                showChevron={false}
-                rightElement={
-                  <Switch
-                    value={notificationsEnabled}
-                    onValueChange={handleNotificationToggle}
-                    trackColor={{ false: colors.border, true: colors.primary }}
-                    thumbColor="#fff"
-                  />
-                }
-              />
-              <View style={styles.divider} />
               <MenuRow
                 icon={<Settings size={20} color="#666" />}
                 iconBg="#f0f0f0"

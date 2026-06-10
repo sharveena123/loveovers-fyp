@@ -1,41 +1,43 @@
 import {
-  FoodBusinessAddressField,
-  type SelectedFoodPlace,
+    FoodBusinessAddressField,
+    type SelectedFoodPlace,
 } from "@/src/components/auth/FoodBusinessAddressField";
 import {
-  ImageUploadField,
-  MultiImageUploadField,
+    ImageUploadField,
+    MultiImageUploadField,
 } from "@/src/components/auth/ImageUploadField";
+import { FieldError, FormSubmitError } from "@/src/components/FieldError";
 import InputField from "@/src/components/InputField";
 import PrimaryButton from "@/src/components/PrimaryButton";
 import { Text } from "@/src/components/StyledText";
 import {
-  getSellerPostAuthRoute,
-  registerSellerAccount,
-  type SellerVerificationType,
+    getSellerPostAuthRoute,
+    registerSellerAccount,
+    type SellerVerificationType,
 } from "@/src/services/firebase/sellerRegistration";
 import { hasGooglePlacesApiKey } from "@/src/services/places/googlePlaces";
 import { colors, spacing } from "@/src/theme/styles";
+import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
 import { router } from "expo-router";
 import {
-  Building2,
-  Check,
-  ChevronLeft,
-  Link,
-  Lock,
-  Mail,
-  Phone,
-  User,
+    Building2,
+    Check,
+    ChevronLeft,
+    Link,
+    Lock,
+    Mail,
+    Phone,
+    User,
 } from "lucide-react-native";
 import { useState } from "react";
 import {
-  Alert,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  View
+    Alert,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 
 type Step = 1 | 2;
@@ -69,84 +71,56 @@ export default function SellerRegisterScreen() {
   const [sampleUris, setSampleUris] = useState<string[]>([]);
   const [socialMediaLink, setSocialMediaLink] = useState("");
   const [businessDescription, setBusinessDescription] = useState("");
+  const [errors, setErrors] = useState<FormErrors>({});
 
-  const validateStep1 = (): boolean => {
-    if (
-      !contactName.trim() ||
-      !businessName.trim() ||
-      !email.trim() ||
-      !phone.trim() ||
-      !password ||
-      !confirmPassword
-    ) {
-      Alert.alert("Missing fields", "Please complete all account fields.");
-      return false;
-    }
+  const buildStep1Errors = (): FormErrors => {
+    const next: FormErrors = {};
+    if (!contactName.trim()) next.contactName = "Owner name is required";
+    if (!businessName.trim()) next.businessName = "Business name is required";
+    if (!email.trim()) next.email = "Email is required";
+    else if (!email.includes("@")) next.email = "Enter a valid email address";
+    if (!phone.trim()) next.phone = "Phone number is required";
+    if (!password) next.password = "Password is required";
+    else if (password.length < 6)
+      next.password = "Password must be at least 6 characters";
+    if (!confirmPassword) next.confirmPassword = "Please confirm your password";
+    else if (password !== confirmPassword)
+      next.confirmPassword = "Passwords do not match";
+    if (!profileImageUri) next.profileImage = "Please upload a profile image";
+
     if (!useManualVerification) {
       if (!selectedPlace && hasGooglePlacesApiKey()) {
-        Alert.alert(
-          "Select your business",
-          "Pick your café, bakery, or restaurant from the list.",
-        );
-        return false;
-      }
-      if (!businessAddress.trim()) {
-        Alert.alert(
-          "Business address",
-          "Enter or select your business address.",
-        );
-        return false;
+        next.businessAddress = "Pick your business from the search list";
+      } else if (!businessAddress.trim()) {
+        next.businessAddress = "Enter or select your business address";
       }
     } else if (!businessAddress.trim()) {
-      Alert.alert("Address", "Enter your pickup area or address.");
-      return false;
+      next.businessAddress = "Enter your pickup area or address";
     }
-    if (!profileImageUri) {
-      Alert.alert("Profile photo", "Please upload a profile image.");
-      return false;
-    }
-    if (!email.includes("@")) {
-      Alert.alert("Email", "Enter a valid email address.");
-      return false;
-    }
-    if (password.length < 6) {
-      Alert.alert("Password", "Password must be at least 6 characters.");
-      return false;
-    }
-    if (password !== confirmPassword) {
-      Alert.alert("Password", "Passwords do not match.");
-      return false;
-    }
-    return true;
+
+    return next;
   };
 
-  const validateStep2 = (): boolean => {
+  const buildStep2Errors = (): FormErrors => {
+    const next: FormErrors = {};
     if (verificationType === "business_verified") {
-      if (!ssmNumber.trim() || !googleMapsLink.trim() || !storefrontUri) {
-        Alert.alert(
-          "Business verification",
-          "SSM number, Google Maps link, and storefront photo are required.",
-        );
-        return false;
+      if (!ssmNumber.trim())
+        next.ssmNumber = "SSM registration number is required";
+      if (!googleMapsLink.trim())
+        next.googleMapsLink = "Google Maps link is required";
+      if (!storefrontUri) next.storefront = "Storefront photo is required";
+    } else {
+      if (workspaceUris.length === 0)
+        next.workspacePhotos = "Add at least one workspace photo";
+      if (sampleUris.length === 0)
+        next.samplePhotos = "Add at least one sample product photo";
+      if (!socialMediaLink.trim())
+        next.socialMediaLink = "Social media link is required";
+      if (businessDescription.trim().length < 20) {
+        next.businessDescription = "Description must be at least 20 characters";
       }
-      return true;
     }
-    if (verificationType === "manual_verification") {
-      if (
-        workspaceUris.length === 0 ||
-        sampleUris.length === 0 ||
-        !socialMediaLink.trim() ||
-        businessDescription.trim().length < 20
-      ) {
-        Alert.alert(
-          "Manual verification",
-          "Add workspace & sample photos, social link, and a short description (20+ characters).",
-        );
-        return false;
-      }
-      return true;
-    }
-    return false;
+    return next;
   };
 
   const handlePlaceSelected = (place: SelectedFoodPlace | null) => {
@@ -168,8 +142,16 @@ export default function SellerRegisterScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!validateStep2() || !profileImageUri) return;
+    const stepErrors = buildStep2Errors();
+    if (Object.keys(stepErrors).length > 0 || !profileImageUri) {
+      if (!profileImageUri) {
+        stepErrors.profileImage = "Please upload a profile image";
+      }
+      setErrors(stepErrors);
+      return;
+    }
 
+    setErrors({});
     const resolvedAddress =
       selectedPlace?.formattedAddress || businessAddress.trim();
     const resolvedMapsLink =
@@ -227,7 +209,7 @@ export default function SellerRegisterScreen() {
       } else if (err.code === "auth/weak-password") {
         msg = "Password is too weak.";
       }
-      Alert.alert("Error", msg);
+      setErrors({ submit: msg });
     } finally {
       setLoading(false);
     }
@@ -267,67 +249,100 @@ export default function SellerRegisterScreen() {
         </View>
 
         <View style={styles.card}>
+          <FormSubmitError message={errors.submit} />
+
           {step === 1 && (
             <>
               <ImageUploadField
                 label="Profile image"
                 hint="Photo of owner or brand logo"
                 uri={profileImageUri}
-                onChange={setProfileImageUri}
+                onChange={(uri) => {
+                  setProfileImageUri(uri);
+                  setErrors((prev) => clearFieldError(prev, "profileImage"));
+                }}
                 required
+                error={errors.profileImage}
               />
               <Field
                 label="Owner name"
                 icon={<User size={18} color={colors.textSoft} />}
+                error={errors.contactName}
               >
                 <InputField
                   value={contactName}
-                  onChangeText={setContactName}
+                  onChangeText={(text) => {
+                    setContactName(text);
+                    setErrors((prev) => clearFieldError(prev, "contactName"));
+                  }}
                   placeholder="Your full name"
+                  hasError={!!errors.contactName}
                   style={styles.input}
                 />
               </Field>
               <Field
                 label="Business name"
                 icon={<Building2 size={18} color={colors.textSoft} />}
+                error={errors.businessName}
               >
                 <InputField
                   value={businessName}
-                  onChangeText={setBusinessName}
+                  onChangeText={(text) => {
+                    setBusinessName(text);
+                    setErrors((prev) => clearFieldError(prev, "businessName"));
+                  }}
                   placeholder="Café / bakery name"
+                  hasError={!!errors.businessName}
                   style={styles.input}
                 />
               </Field>
               <Field
                 label="Email"
                 icon={<Mail size={18} color={colors.textSoft} />}
+                error={errors.email}
               >
                 <InputField
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={(text) => {
+                    setEmail(text);
+                    setErrors((prev) => clearFieldError(prev, "email"));
+                  }}
                   placeholder="you@business.com"
                   keyboardType="email-address"
+                  hasError={!!errors.email}
                   style={styles.input}
                 />
               </Field>
               <Field
                 label="Phone"
                 icon={<Phone size={18} color={colors.textSoft} />}
+                error={errors.phone}
               >
                 <InputField
                   value={phone}
-                  onChangeText={setPhone}
+                  onChangeText={(text) => {
+                    setPhone(text);
+                    setErrors((prev) => clearFieldError(prev, "phone"));
+                  }}
                   placeholder="01x xxxx xxxx"
                   keyboardType="numeric"
+                  hasError={!!errors.phone}
                   style={styles.input}
                 />
               </Field>
               <FoodBusinessAddressField
                 query={businessAddress}
-                onQueryChange={setBusinessAddress}
+                onQueryChange={(text) => {
+                  setBusinessAddress(text);
+                  setErrors((prev) => clearFieldError(prev, "businessAddress"));
+                }}
                 selectedPlace={selectedPlace}
-                onPlaceSelected={handlePlaceSelected}
+                onPlaceSelected={(place) => {
+                  handlePlaceSelected(place);
+                  setErrors((prev) => clearFieldError(prev, "businessAddress"));
+                }}
                 manualMode={useManualVerification}
+                error={errors.businessAddress}
               />
 
               <TouchableOpacity
@@ -359,30 +374,50 @@ export default function SellerRegisterScreen() {
               <Field
                 label="Password"
                 icon={<Lock size={18} color={colors.textSoft} />}
+                error={errors.password}
               >
                 <InputField
                   value={password}
-                  onChangeText={setPassword}
+                  onChangeText={(text) => {
+                    setPassword(text);
+                    setErrors((prev) => clearFieldError(prev, "password"));
+                  }}
                   placeholder="Min. 6 characters"
                   secureTextEntry
+                  hasError={!!errors.password}
                   style={styles.input}
                 />
               </Field>
               <Field
                 label="Confirm password"
                 icon={<Lock size={18} color={colors.textSoft} />}
+                error={errors.confirmPassword}
               >
                 <InputField
                   value={confirmPassword}
-                  onChangeText={setConfirmPassword}
+                  onChangeText={(text) => {
+                    setConfirmPassword(text);
+                    setErrors((prev) =>
+                      clearFieldError(prev, "confirmPassword"),
+                    );
+                  }}
                   placeholder="Re-enter password"
                   secureTextEntry
+                  hasError={!!errors.confirmPassword}
                   style={styles.input}
                 />
               </Field>
               <PrimaryButton
                 title="Continue"
-                onPress={() => validateStep1() && setStep(2)}
+                onPress={() => {
+                  const stepErrors = buildStep1Errors();
+                  if (Object.keys(stepErrors).length > 0) {
+                    setErrors(stepErrors);
+                    return;
+                  }
+                  setErrors({});
+                  setStep(2);
+                }}
               />
             </>
           )}
@@ -392,11 +427,15 @@ export default function SellerRegisterScreen() {
               <Text style={styles.sectionLead}>
                 Registered business documents
               </Text>
-              <Field label="SSM registration number">
+              <Field label="SSM registration number" error={errors.ssmNumber}>
                 <InputField
                   value={ssmNumber}
-                  onChangeText={setSsmNumber}
+                  onChangeText={(text) => {
+                    setSsmNumber(text);
+                    setErrors((prev) => clearFieldError(prev, "ssmNumber"));
+                  }}
                   placeholder="e.g. 202401234567"
+                  hasError={!!errors.ssmNumber}
                   style={styles.inputPlain}
                 />
               </Field>
@@ -415,11 +454,18 @@ export default function SellerRegisterScreen() {
               <Field
                 label="Google Maps link"
                 icon={<Link size={18} color={colors.textSoft} />}
+                error={errors.googleMapsLink}
               >
                 <InputField
                   value={googleMapsLink}
-                  onChangeText={setGoogleMapsLink}
+                  onChangeText={(text) => {
+                    setGoogleMapsLink(text);
+                    setErrors((prev) =>
+                      clearFieldError(prev, "googleMapsLink"),
+                    );
+                  }}
                   placeholder="Auto-filled when you pick a place"
+                  hasError={!!errors.googleMapsLink}
                   style={styles.inputPlain}
                 />
               </Field>
@@ -427,8 +473,12 @@ export default function SellerRegisterScreen() {
                 label="Storefront photo"
                 hint="Clear photo of your shop front"
                 uri={storefrontUri}
-                onChange={setStorefrontUri}
+                onChange={(uri) => {
+                  setStorefrontUri(uri);
+                  setErrors((prev) => clearFieldError(prev, "storefront"));
+                }}
                 required
+                error={errors.storefront}
               />
               <PrimaryButton
                 title={loading ? "Submitting…" : "Submit registration"}
@@ -447,40 +497,64 @@ export default function SellerRegisterScreen() {
                 label="Workspace / bakery photos"
                 hint="Kitchen, prep area, or workspace"
                 uris={workspaceUris}
-                onChange={setWorkspaceUris}
+                onChange={(uris) => {
+                  setWorkspaceUris(uris);
+                  setErrors((prev) => clearFieldError(prev, "workspacePhotos"));
+                }}
                 max={3}
                 required
+                error={errors.workspacePhotos}
               />
               <MultiImageUploadField
                 label="Sample product photos"
                 hint="Examples of what you sell"
                 uris={sampleUris}
-                onChange={setSampleUris}
+                onChange={(uris) => {
+                  setSampleUris(uris);
+                  setErrors((prev) => clearFieldError(prev, "samplePhotos"));
+                }}
                 max={3}
                 required
+                error={errors.samplePhotos}
               />
               <Field
                 label="Social media business link"
                 icon={<Link size={18} color={colors.textSoft} />}
+                error={errors.socialMediaLink}
               >
                 <InputField
                   value={socialMediaLink}
-                  onChangeText={setSocialMediaLink}
+                  onChangeText={(text) => {
+                    setSocialMediaLink(text);
+                    setErrors((prev) =>
+                      clearFieldError(prev, "socialMediaLink"),
+                    );
+                  }}
                   placeholder="Instagram / Facebook page URL"
+                  hasError={!!errors.socialMediaLink}
                   style={styles.inputPlain}
                 />
               </Field>
               <Text style={styles.label}>Short business description *</Text>
               <TextInput
-                style={styles.textArea}
+                style={[
+                  styles.textArea,
+                  errors.businessDescription ? styles.textAreaError : null,
+                ]}
                 value={businessDescription}
-                onChangeText={setBusinessDescription}
+                onChangeText={(text) => {
+                  setBusinessDescription(text);
+                  setErrors((prev) =>
+                    clearFieldError(prev, "businessDescription"),
+                  );
+                }}
                 placeholder="What do you bake/sell, pickup area, typical surplus times…"
                 multiline
                 numberOfLines={4}
                 textAlignVertical="top"
                 placeholderTextColor={colors.textSoft}
               />
+              <FieldError message={errors.businessDescription} />
               <View style={styles.pendingNote}>
                 <Text style={styles.pendingNoteText}>
                   After submit, your status will be pending_review until an
@@ -511,10 +585,12 @@ function Field({
   label,
   icon,
   children,
+  error,
 }: {
   label: string;
   icon?: React.ReactNode;
   children: React.ReactNode;
+  error?: string;
 }) {
   return (
     <View style={styles.field}>
@@ -523,6 +599,7 @@ function Field({
         <Text style={styles.label}>{label} *</Text>
       </View>
       {children}
+      <FieldError message={error} />
     </View>
   );
 }
@@ -592,7 +669,10 @@ const styles = StyleSheet.create({
     minHeight: 100,
     fontSize: 15,
     color: colors.text,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  textAreaError: {
+    borderColor: colors.error,
   },
   typeCard: {
     flexDirection: "row",

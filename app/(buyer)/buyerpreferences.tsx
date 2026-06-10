@@ -1,4 +1,5 @@
 import PrimaryButton from "@/src/components/PrimaryButton";
+import { FieldError, FormSubmitError } from "@/src/components/FieldError";
 import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import { useTheme } from "@/src/hooks/useTheme";
@@ -10,7 +11,7 @@ import {
 import { colors as defaultColors, spacing } from "@/src/theme/styles";
 import { BUYER_ROUTES, goBackToReturn } from "@/src/utils/navigation";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { ArrowLeft, Bell, MapPin, Moon, Zap } from "lucide-react-native";
+import { ArrowLeft, MapPin, Moon, Zap } from "lucide-react-native";
 import React, { useEffect, useState } from "react";
 import {
     ActivityIndicator,
@@ -26,7 +27,7 @@ import {
 export default function BuyerPreferencesScreen() {
   const router = useRouter();
   const { returnTo } = useLocalSearchParams<{ returnTo?: string }>();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const handleBack = () =>
     goBackToReturn(router, returnTo, BUYER_ROUTES.profile);
@@ -36,15 +37,16 @@ export default function BuyerPreferencesScreen() {
   const [preferences, setPreferences] = useState<BuyerPreferences | null>(null);
 
   // State for preferences
-  const [pushNotifications, setPushNotifications] = useState(false);
-  const [emailNotifications, setEmailNotifications] = useState(false);
   const [searchRadius, setSearchRadius] = useState("10");
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [darkModeLocal, setDarkModeLocal] = useState(isDarkMode);
+  const [errors, setErrors] = useState<{ searchRadius?: string; submit?: string }>({});
 
   const styles = getStyles(colors);
 
   useEffect(() => {
+    if (authLoading) return;
+
     const fetchPreferences = async () => {
       try {
         if (!user?.uid) {
@@ -56,8 +58,6 @@ export default function BuyerPreferencesScreen() {
         const prefs = await getBuyerPreferences(user.uid);
         if (prefs) {
           setPreferences(prefs);
-          setPushNotifications(prefs.pushNotifications);
-          setEmailNotifications(prefs.emailNotifications);
           setSearchRadius(prefs.searchRadius.toString());
           setAutoRefresh(prefs.autoRefresh);
           setDarkModeLocal(prefs.darkMode);
@@ -71,7 +71,7 @@ export default function BuyerPreferencesScreen() {
     };
 
     fetchPreferences();
-  }, [user?.uid]);
+  }, [user?.uid, authLoading]);
 
   const handleSave = async () => {
     try {
@@ -79,18 +79,19 @@ export default function BuyerPreferencesScreen() {
       const radius = parseInt(searchRadius);
 
       if (isNaN(radius) || radius < 1 || radius > 100) {
-        Alert.alert("Validation", "Search radius must be between 1 and 100 km");
+        setErrors({
+          searchRadius: "Search radius must be between 1 and 100 km",
+        });
         return;
       }
 
+      setErrors({});
       if (user?.uid) {
         // Update dark mode immediately
         await setIsDarkMode(darkModeLocal);
 
         // Update preferences in Firebase
         await updateBuyerPreferences(user.uid, {
-          pushNotifications,
-          emailNotifications,
           searchRadius: radius,
           autoRefresh,
           darkMode: darkModeLocal,
@@ -105,7 +106,7 @@ export default function BuyerPreferencesScreen() {
       }
     } catch (error) {
       console.error("Error saving preferences:", error);
-      Alert.alert("Error", "Failed to save preferences");
+      setErrors({ submit: "Failed to save preferences. Please try again." });
     } finally {
       setSaving(false);
     }
@@ -115,6 +116,7 @@ export default function BuyerPreferencesScreen() {
     const current = parseInt(searchRadius) || 10;
     if (current < 100) {
       setSearchRadius((current + 5).toString());
+      setErrors((prev) => ({ ...prev, searchRadius: undefined, submit: undefined }));
     }
   };
 
@@ -122,10 +124,11 @@ export default function BuyerPreferencesScreen() {
     const current = parseInt(searchRadius) || 10;
     if (current > 1) {
       setSearchRadius((current - 5).toString());
+      setErrors((prev) => ({ ...prev, searchRadius: undefined, submit: undefined }));
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <SafeAreaView style={styles.container}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -157,44 +160,6 @@ export default function BuyerPreferencesScreen() {
 
         {/* Preferences Sections */}
         <View style={styles.preferencesContainer}>
-          {/* Notifications Section */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Bell size={20} color={colors.primary} />
-              <Text style={styles.sectionTitle}>Notifications</Text>
-            </View>
-
-            <View style={styles.preferenceItem}>
-              <View style={styles.preferenceLabel}>
-                <Text style={styles.label}>Push Notifications</Text>
-                <Text style={styles.description}>
-                  Receive alerts about deals and orders
-                </Text>
-              </View>
-              <Switch
-                value={pushNotifications}
-                onValueChange={setPushNotifications}
-                trackColor={{ false: "#ccc", true: colors.primary }}
-                thumbColor={colors.white}
-              />
-            </View>
-
-            <View style={styles.preferenceItem}>
-              <View style={styles.preferenceLabel}>
-                <Text style={styles.label}>Email Notifications</Text>
-                <Text style={styles.description}>
-                  Receive updates via email
-                </Text>
-              </View>
-              <Switch
-                value={emailNotifications}
-                onValueChange={setEmailNotifications}
-                trackColor={{ false: "#ccc", true: colors.primary }}
-                thumbColor={colors.white}
-              />
-            </View>
-          </View>
-
           {/* Search Section */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -231,6 +196,7 @@ export default function BuyerPreferencesScreen() {
                 <Text style={styles.radiusButtonText}>+</Text>
               </TouchableOpacity>
             </View>
+            <FieldError message={errors.searchRadius} />
           </View>
 
           {/* App Preferences Section */}
@@ -282,6 +248,7 @@ export default function BuyerPreferencesScreen() {
 
         {/* Action Buttons */}
         <View style={styles.buttonContainer}>
+          <FormSubmitError message={errors.submit} />
           <PrimaryButton
             title={saving ? "Saving..." : "Save Preferences"}
             onPress={handleSave}

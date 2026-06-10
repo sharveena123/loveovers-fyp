@@ -5,18 +5,11 @@ import {
   DatasetRow,
   DayOfWeek,
   ItemForecast,
-  Weather,
 } from "@/src/ai/types";
 import { db } from "@/src/services/firebase/config";
 import { inventoryService } from "@/src/services/firebase/inventoryServices";
 import { colors } from "@/src/theme/styles";
-import {
-  collection,
-  getDocs,
-  query,
-  Timestamp,
-  where,
-} from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 
 const DAY_ORDER = [
   "Monday",
@@ -98,13 +91,19 @@ const buildInsights = (
   const lines: string[] = [];
   const { kpis, wasteAnalysis, salesOverTime, modelAccuracy } = bundle;
 
-  lines.push(
-    `Model explains ${(modelAccuracy * 100).toFixed(0)}% of sales variance (R²) across ${bundle.trainingRows.toLocaleString()} training rows.`,
-  );
+  if (modelAccuracy > 0) {
+    lines.push(
+      `Your sales file has ${bundle.trainingRows.toLocaleString()} rows. Suggestions are about ${(modelAccuracy * 100).toFixed(0)}% reliable based on past patterns.`,
+    );
+  } else {
+    lines.push(
+      `We are using ${bundle.trainingRows.toLocaleString()} sales rows from your shop history.`,
+    );
+  }
 
   if (kpis.topProduct !== "N/A") {
     lines.push(
-      `Top seller: ${kpis.topProduct}. Focus production on high-demand items during peak days.`,
+      `${kpis.topProduct} is your best seller — bake more of this on busy days.`,
     );
   }
 
@@ -113,7 +112,7 @@ const buildInsights = (
     .slice(0, 2);
   highWaste.forEach((w) => {
     lines.push(
-      `${w.itemName} wastes ${w.wastePercentage.toFixed(0)}% of production — reduce batch size or run a discount.`,
+      `${w.itemName} often gets left over (${w.wastePercentage.toFixed(0)}% waste) — try baking less or listing mystery bags.`,
     );
   });
 
@@ -123,17 +122,17 @@ const buildInsights = (
     const delta =
       prev.sales > 0 ? ((last.sales - prev.sales) / prev.sales) * 100 : 0;
     lines.push(
-      `Latest day revenue ${delta >= 0 ? "up" : "down"} ${Math.abs(delta).toFixed(0)}% vs prior day in your dataset.`,
+      `Latest day earnings were ${delta >= 0 ? "up" : "down"} ${Math.abs(delta).toFixed(0)}% compared with the day before.`,
     );
   }
 
   if (kpis.wastePercentage > 20) {
     lines.push(
-      `Overall waste is ${kpis.wastePercentage.toFixed(1)}%. Use AI batch predictions before each bake to align production with demand.`,
+      `About ${kpis.wastePercentage.toFixed(1)}% of what you make goes unsold. Check bake suggestions before each batch.`,
     );
   } else {
     lines.push(
-      `Waste is well controlled at ${kpis.wastePercentage.toFixed(1)}%. Keep using predicted production quantities.`,
+      `Only ${kpis.wastePercentage.toFixed(1)}% waste — you are doing well. Keep matching bake amounts to expected sales.`,
     );
   }
 
@@ -182,15 +181,13 @@ async function buildRecordsFromFirebase(
     const since = new Date();
     since.setDate(since.getDate() - 30);
     const ordersRef = collection(db, "sellers", sellerId, "orders");
-    const ordersQuery = query(
-      ordersRef,
-      where("createdAt", ">=", Timestamp.fromDate(since)),
-    );
-    const snap = await getDocs(ordersQuery);
+    // Fetch all orders (no composite index) and filter by date client-side.
+    const snap = await getDocs(ordersRef);
 
     snap.forEach((docSnap) => {
       const data = docSnap.data();
       const created = data.createdAt?.toDate?.() ?? new Date();
+      if (created < since) return;
       const dateKey = created.toISOString().split("T")[0];
 
       if (Array.isArray(data.items)) {
@@ -261,12 +258,7 @@ export async function loadDatasetAnalytics(
   try {
     const today = new Date();
     const dayName = DAY_ORDER[today.getDay() === 0 ? 6 : today.getDay() - 1];
-    const batch = await batchPredict(
-      cafeId,
-      dayName as DayOfWeek,
-      "Sunny" as Weather,
-      0,
-    );
+    const batch = await batchPredict(cafeId, dayName as DayOfWeek);
     if (batch.predictions?.length) {
       const forecasts: ItemForecast[] = batch.predictions
         .slice(0, 8)

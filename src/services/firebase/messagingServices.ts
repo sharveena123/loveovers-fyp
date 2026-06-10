@@ -10,8 +10,10 @@ import {
   Timestamp,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "./config";
+import { BuyerProfile, getUserProfile } from "./user";
 
 export interface Message {
   id: string;
@@ -82,6 +84,71 @@ export const QUICK_MESSAGES = {
   ],
 };
 
+const GENERIC_BUYER_LABELS = new Set(["buyer", "customer", "user", "guest"]);
+
+export function isGenericBuyerLabel(name?: string): boolean {
+  const normalized = name?.trim().toLowerCase() ?? "";
+  return !normalized || GENERIC_BUYER_LABELS.has(normalized);
+}
+
+/** Prefer Firestore buyer profile name over auth placeholder "Buyer". */
+export async function resolveBuyerDisplayName(
+  buyerId: string,
+  storedName?: string,
+): Promise<string> {
+  if (!isGenericBuyerLabel(storedName)) {
+    return storedName!.trim();
+  }
+
+  try {
+    const profile = await getUserProfile(buyerId);
+    if (profile?.role === "buyer") {
+      const fullName = (profile as BuyerProfile).fullName?.trim();
+      if (fullName) return fullName;
+    }
+  } catch {
+    // fall through
+  }
+
+  return storedName?.trim() || "Customer";
+}
+
+export async function getBuyerDisplayNameForUser(
+  uid: string,
+  authDisplayName?: string | null,
+): Promise<string> {
+  try {
+    const profile = await getUserProfile(uid);
+    if (profile?.role === "buyer") {
+      const fullName = (profile as BuyerProfile).fullName?.trim();
+      if (fullName) return fullName;
+    }
+  } catch {
+    // fall through
+  }
+
+  const fromAuth = authDisplayName?.trim();
+  if (fromAuth && !isGenericBuyerLabel(fromAuth)) {
+    return fromAuth;
+  }
+
+  return "Customer";
+}
+
+export async function enrichConversationsWithBuyerNames<
+  T extends Conversation & { id: string },
+>(conversations: T[]): Promise<T[]> {
+  return Promise.all(
+    conversations.map(async (conversation) => ({
+      ...conversation,
+      buyerName: await resolveBuyerDisplayName(
+        conversation.buyerId,
+        conversation.buyerName,
+      ),
+    })),
+  );
+}
+
 // ========================
 // CONVERSATION FUNCTIONS
 // ========================
@@ -102,7 +169,22 @@ export const createConversation = async (
     );
     const snapshot = await getDocs(q);
 
+    const trimmedBuyerName = buyerName.trim() || "Customer";
+
     if (!snapshot.empty) {
+      const existingRef = snapshot.docs[0].ref;
+      const existing = snapshot.docs[0].data() as Conversation;
+
+      if (
+        !isGenericBuyerLabel(trimmedBuyerName) &&
+        isGenericBuyerLabel(existing.buyerName)
+      ) {
+        await updateDoc(existingRef, {
+          buyerName: trimmedBuyerName,
+          updatedAt: Timestamp.now(),
+        });
+      }
+
       return snapshot.docs[0].id;
     }
 
@@ -110,7 +192,7 @@ export const createConversation = async (
     const conversation: Conversation = {
       id: "", // Will be set from doc ID
       buyerId,
-      buyerName,
+      buyerName: trimmedBuyerName,
       sellerId,
       sellerName,
       ...(orderId && { orderId }),
@@ -185,6 +267,30 @@ export const getConversation = async (conversationId: string) => {
   }
 };
 
+function countUnreadFromMessages(
+  messages: Pick<Message, "sendersRole" | "read">[],
+): Pick<Conversation, "buyerUnreadCount" | "sellerUnreadCount"> {
+  let buyerUnreadCount = 0;
+  let sellerUnreadCount = 0;
+
+  for (const message of messages) {
+    if (message.read === true) continue;
+    if (message.sendersRole === "buyer") sellerUnreadCount += 1;
+    else if (message.sendersRole === "seller") buyerUnreadCount += 1;
+  }
+
+  return { buyerUnreadCount, sellerUnreadCount };
+}
+
+async function syncConversationUnreadCounts(conversationId: string) {
+  const messages = await getMessages(conversationId);
+  const counts = countUnreadFromMessages(messages);
+  await updateDoc(doc(db, "conversations", conversationId), {
+    ...counts,
+    updatedAt: Timestamp.now(),
+  });
+}
+
 // ========================
 // MESSAGE FUNCTIONS
 // ========================
@@ -219,18 +325,16 @@ export const sendMessage = async (
     );
     const docRef = await addDoc(messagesRef, message);
 
-    // Update conversation with last message
-    const unreadField =
-      sendersRole === "buyer" ? "sellerUnreadCount" : "buyerUnreadCount";
     const conversationRef = doc(db, "conversations", conversationId);
-    const conv = await getConversation(conversationId);
-    const currentUnreadCount = (conv?.[unreadField] || 0) as number;
+    const allMessages = await getMessages(conversationId);
+    const counts = countUnreadFromMessages(allMessages);
 
     await updateDoc(conversationRef, {
       lastMessage: text,
       lastMessageTime: Timestamp.now(),
       lastMessageSenderId: senderId,
-      [unreadField]: currentUnreadCount + 1,
+      buyerUnreadCount: counts.buyerUnreadCount,
+      sellerUnreadCount: counts.sellerUnreadCount,
       updatedAt: Timestamp.now(),
     });
 
@@ -281,6 +385,55 @@ export const markMessagesAsRead = async (
   } catch (error) {
     console.error("Error marking messages as read:", error);
     throw error;
+  }
+};
+
+/** Clears unread badge for the reader and marks the other party's messages as read. */
+export const markConversationAsRead = async (
+  conversationId: string,
+  readerRole: "buyer" | "seller",
+) => {
+  const unreadField =
+    readerRole === "buyer" ? "buyerUnreadCount" : "sellerUnreadCount";
+  const otherRole = readerRole === "buyer" ? "seller" : "buyer";
+  const conversationRef = doc(db, "conversations", conversationId);
+
+  // Reset badge first so a failed message batch cannot leave a stale count.
+  await updateDoc(conversationRef, {
+    [unreadField]: 0,
+    updatedAt: Timestamp.now(),
+  });
+
+  try {
+    const messages = await getMessages(conversationId);
+    const unreadFromOther = messages.filter(
+      (m) => m.sendersRole === otherRole && m.read !== true,
+    );
+
+    if (unreadFromOther.length === 0) return;
+
+    const batch = writeBatch(db);
+    for (const message of unreadFromOther) {
+      if (!message.id) continue;
+      batch.update(
+        doc(db, "conversations", conversationId, "messages", message.id),
+        { read: true },
+      );
+    }
+    await batch.commit();
+  } catch (error) {
+    console.error("Error marking messages as read:", error);
+  }
+};
+
+/** Recompute unread counts from message read flags (fixes stale badges). */
+export const repairConversationUnreadCounts = async (
+  conversationId: string,
+) => {
+  try {
+    await syncConversationUnreadCounts(conversationId);
+  } catch (error) {
+    console.error("Error repairing unread counts:", error);
   }
 };
 

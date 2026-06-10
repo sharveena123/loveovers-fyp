@@ -5,6 +5,7 @@ import {
   CafeDatasetApiResponse,
   CafeDatasetResponse,
   CafeInfo,
+  ClassifyFoodResponse,
   DatasetAssessment,
   DatasetRow,
   DayOfWeek,
@@ -14,10 +15,14 @@ import {
   RecordDailySalesResponse,
   RetrainResult,
   TrainingResult,
-  Weather,
 } from "./types";
+import { parseClassifyFoodResponse } from "@/src/utils/foodClassification";
 
-const BASE_URL = "http://192.168.1.6:5000";
+/** Must be reachable from the phone (same LAN IP as Metro, not localhost). */
+export const AI_API_BASE_URL =
+  process.env.EXPO_PUBLIC_AI_API_BASE_URL ?? "http://192.168.100.70:5000";
+
+const BASE_URL = AI_API_BASE_URL;
 
 const postFormData = async <T>(
   path: string,
@@ -127,25 +132,53 @@ export const trainModel = async (
 
 // ─── Prediction ────────────────────────────────────────────
 
+const DAY_INDEX: Record<DayOfWeek, number> = {
+  Sunday: 0,
+  Monday: 1,
+  Tuesday: 2,
+  Wednesday: 3,
+  Thursday: 4,
+  Friday: 5,
+  Saturday: 6,
+};
+
+const toLocalIso = (d: Date): string => {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+/**
+ * Date (YYYY-MM-DD) of the next occurrence of `day`, today included.
+ * The backend derives day_of_week_num and all DOW-aware lag features from
+ * the `date` field — sending today's date for every selected day would make
+ * all weekdays return identical predictions.
+ */
+export const nextDateForDay = (day: DayOfWeek): string => {
+  const now = new Date();
+  const diff = (DAY_INDEX[day] - now.getDay() + 7) % 7;
+  const target = new Date(now);
+  target.setDate(now.getDate() + diff);
+  return toLocalIso(target);
+};
+
 export const predictForCafe = async (
   data: PredictionRequest,
 ): Promise<PredictionResponse> => {
-  return postJson<PredictionResponse>("/predict", data);
+  return postJson<PredictionResponse>("/predict", {
+    ...data,
+    date: data.date || nextDateForDay(data.day_of_week),
+  });
 };
 
 export const batchPredict = async (
   cafeId: string,
   day: DayOfWeek,
-  weather: Weather,
-  discountPct: number = 0,
   date?: string,
 ): Promise<BatchPredictionResponse> => {
   return postJson<BatchPredictionResponse>("/batch-predict", {
     cafe_id: cafeId,
     day_of_week: day,
-    weather,
-    discount_pct: discountPct,
-    date: date || new Date().toISOString().split("T")[0],
+    date: date || nextDateForDay(day),
   });
 };
 
@@ -190,18 +223,22 @@ export const getCafeDataset = async (
   cafeId: string,
 ): Promise<CafeDatasetResponse | null> => {
   try {
-    const res = await getJson<CafeDatasetApiResponse>(
+    const res = await getJson<CafeDatasetApiResponse & Record<string, unknown>>(
       `/cafe/${cafeId}/dataset`,
     );
-    const recent = mapRecentSalesToRecords(res.recent_sales || []);
+    let recent = mapRecentSalesToRecords(res.recent_sales || []);
+    if (!recent.length) {
+      recent = normalizeDatasetRecords(res);
+    }
     const summary = res.summary ?? { total_rows: recent.length };
+    const totalRows = summary.total_rows ?? recent.length;
 
     return {
       cafe_id: res.cafe_id ?? cafeId,
       cafe_name: res.cafe_name ?? cafeId,
       records: recent,
       summary: {
-        total_rows: summary.total_rows ?? recent.length,
+        total_rows: totalRows,
         items: res.items,
         date_start: undefined,
         date_end: undefined,
@@ -256,4 +293,49 @@ export const recordDailySales = async (
 /** Retrain model from all sales stored in the backend database. */
 export const retrainCafe = async (cafeId: string): Promise<RetrainResult> => {
   return postJson<RetrainResult>(`/cafe/${cafeId}/retrain`, {});
+};
+
+// ─── Food category classification ─────────────────────────
+
+export const CLASSIFY_FOOD_URL = `${AI_API_BASE_URL}/classify-food`;
+
+/** POST /classify-food — multipart upload; do not set Content-Type (RN sets boundary). */
+export const classifyFoodImage = async (
+  imageUri: string,
+  options?: { debug?: boolean },
+): Promise<ClassifyFoodResponse> => {
+  const formData = new FormData();
+  formData.append("file", {
+    uri: imageUri,
+    type: "image/jpeg",
+    name: "food.jpg",
+  } as any);
+
+  const url = options?.debug
+    ? `${CLASSIFY_FOOD_URL}?debug=1`
+    : CLASSIFY_FOOD_URL;
+
+  const response = await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
+
+  const data = (await response.json().catch(() => ({}))) as ClassifyFoodResponse & {
+    error?: string;
+  };
+
+  if (!response.ok) {
+    console.error("classify-food failed", {
+      url,
+      status: response.status,
+      data,
+    });
+    throw new Error(
+      data.error || String(response.status) || "Classification failed",
+    );
+  }
+
+  return parseClassifyFoodResponse(
+    data as Record<string, unknown>,
+  ) as ClassifyFoodResponse;
 };
