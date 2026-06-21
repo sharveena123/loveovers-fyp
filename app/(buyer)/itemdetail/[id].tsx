@@ -77,6 +77,7 @@ export default function ItemDetail() {
       const allBags = await getAvailableBags({
         latitude: preferred?.latitude ?? DEFAULT_LAT,
         longitude: preferred?.longitude ?? DEFAULT_LNG,
+        locationLabel: preferred?.label,
       });
       const foundBag = allBags.find((b) => b.id === id);
       if (foundBag) setBag(foundBag);

@@ -304,8 +304,11 @@ export default function BuyerHome() {
     }
   };
 
-  const loadBagsByLocation = async (loc: MapLocation) => {
-    const availableBags = await getAvailableBags(loc);
+  const loadBagsByLocation = async (loc: MapLocation, label?: string) => {
+    const availableBags = await getAvailableBags({
+      ...loc,
+      locationLabel: label ?? location,
+    });
 
     const recalculated = availableBags
       .map((bag) => {
@@ -1322,10 +1325,10 @@ export default function BuyerHome() {
               <View style={styles.emptyIconWrap}>
                 <Package size={32} color={colors.primary} />
               </View>
-              <Text style={styles.emptyText}>No listings nearby</Text>
+              <Text style={styles.emptyText}>No listings in your area</Text>
               <Text style={styles.emptySubtext}>
-                Try another area, adjust filters, or check back soon for fresh
-                surplus deals.
+                We only show surplus from sellers in your state. Try another
+                city or check back soon.
               </Text>
               <TouchableOpacity
                 style={styles.emptyBtn}

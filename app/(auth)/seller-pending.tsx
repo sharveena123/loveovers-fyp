@@ -2,15 +2,12 @@ import PrimaryButton from "@/src/components/PrimaryButton";
 import { Text } from "@/src/components/StyledText";
 import { auth } from "@/src/services/firebase/config";
 import { getSellerPostAuthRoute } from "@/src/services/firebase/sellerRegistration";
-import {
-  getUserProfile,
-  SellerProfile,
-} from "@/src/services/firebase/user";
+import { getUserProfile, SellerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import { Clock, ShieldAlert, XCircle } from "lucide-react-native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -31,27 +28,50 @@ export default function SellerPendingScreen() {
       router.replace("/");
       return;
     }
+
     const p = await getUserProfile(user.uid);
     if (!p || p.role !== "seller") {
       router.replace("/");
       return;
     }
+
     const seller = p as SellerProfile;
     if (seller.verificationStatus === "approved") {
       router.replace(getSellerPostAuthRoute(seller));
       return;
     }
+
     setProfile(seller);
   }, []);
 
-  useEffect(() => {
-    load().finally(() => setLoading(false));
-  }, [load]);
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      setLoading(true);
+
+      load()
+        .catch((error) => {
+          console.error("Failed to load seller pending status:", error);
+        })
+        .finally(() => {
+          if (active) {
+            setLoading(false);
+          }
+        });
+
+      return () => {
+        active = false;
+      };
+    }, [load]),
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const handleSignOut = async () => {
@@ -59,7 +79,15 @@ export default function SellerPendingScreen() {
     router.replace("/");
   };
 
-  if (loading || !profile) {
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (!profile) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator size="large" color={colors.primary} />

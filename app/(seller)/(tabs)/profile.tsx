@@ -1,21 +1,15 @@
 import { Text } from "@/src/components/StyledText";
 import { auth } from "@/src/services/firebase/config";
 import { getProfileStats, ProfileStats } from "@/src/services/firebase/profile";
-import {
-  getUserProfile,
-  SellerProfile,
-  updateSellerSettings,
-} from "@/src/services/firebase/user";
+import { getUserProfile, SellerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
 import { formatCo2, formatCurrency } from "@/src/utils/impactMetrics";
 import { pushWithReturn, SELLER_ROUTES } from "@/src/utils/navigation";
 import { router, useFocusEffect } from "expo-router";
 import { signOut } from "firebase/auth";
 import {
-  AlertCircle,
   BarChart3,
   ChevronRight,
-  Clock,
   CreditCard,
   Edit2,
   HelpCircle,
@@ -37,7 +31,6 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Switch,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -153,34 +146,6 @@ export default function ProfileScreen() {
     setRefreshing(false);
   }, [loadProfile]);
 
-  const handleToggleSetting = async (setting: "lowStockAlerts") => {
-    if (!auth.currentUser || !profile) return;
-
-    const currentSettings = profile.settings || {
-      lowStockAlerts: true,
-    };
-
-    const newValue = !currentSettings[setting];
-
-    try {
-      await updateSellerSettings(auth.currentUser.uid, {
-        ...currentSettings,
-        [setting]: newValue,
-      });
-
-      setProfile({
-        ...profile,
-        settings: {
-          ...currentSettings,
-          [setting]: newValue,
-        },
-      });
-    } catch (error) {
-      console.error("Error updating setting:", error);
-      Alert.alert("Error", "Failed to update setting");
-    }
-  };
-
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
       { text: "Cancel", style: "cancel" },
@@ -210,12 +175,6 @@ export default function ProfileScreen() {
       </SafeAreaView>
     );
   }
-
-  const hours = [
-    { day: "Mon – Fri", time: profile.operatingHours?.monday || "7:00 AM – 8:00 PM" },
-    { day: "Saturday", time: profile.operatingHours?.saturday || "8:00 AM – 9:00 PM" },
-    { day: "Sunday", time: profile.operatingHours?.sunday || "9:00 AM – 6:00 PM" },
-  ];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -303,7 +262,7 @@ export default function ProfileScreen() {
             <StatPill
               icon={<Star size={18} color="#c4a574" />}
               iconBg="#f5f0e8"
-              value={stats.rating.toFixed(1)}
+              value={stats.rating > 0 ? stats.rating.toFixed(1) : "New"}
               label="Rating"
               valueColor={colors.primary}
               accentColor="#c4a574"
@@ -318,61 +277,10 @@ export default function ProfileScreen() {
             />
           </View>
 
-          {/* Operating hours */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Operating hours</Text>
-              <TouchableOpacity
-                onPress={() =>
-                  pushWithReturn(
-                    router,
-                    "/(seller)/sellereditprofile",
-                    SELLER_ROUTES.profile,
-                  )
-                }
-              >
-                <Text style={styles.editLink}>Edit</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.card}>
-              {hours.map((row, i) => (
-                <View
-                  key={row.day}
-                  style={[
-                    styles.hourRow,
-                    i < hours.length - 1 && styles.hourRowBorder,
-                  ]}
-                >
-                  <View style={styles.hourDayWrap}>
-                    <Clock size={14} color={colors.textSoft} />
-                    <Text style={styles.dayText}>{row.day}</Text>
-                  </View>
-                  <Text style={styles.hourText}>{row.time}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
           {/* Settings */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Settings</Text>
             <View style={styles.card}>
-              <MenuRow
-                icon={<AlertCircle size={20} color={colors.primary} />}
-                iconBg={colors.primarySoft}
-                title="Low stock alerts"
-                subtitle="When inventory is running low"
-                showChevron={false}
-                rightElement={
-                  <Switch
-                    value={profile.settings?.lowStockAlerts ?? true}
-                    onValueChange={() => handleToggleSetting("lowStockAlerts")}
-                    trackColor={{ false: colors.border, true: colors.primary }}
-                    thumbColor="#fff"
-                  />
-                }
-              />
-              <View style={styles.divider} />
               <MenuRow
                 icon={<CreditCard size={20} color="#666" />}
                 iconBg="#f0f0f0"
@@ -483,8 +391,8 @@ export default function ProfileScreen() {
               </View>
             </View>
             <Text style={styles.impactFootnote}>
-              {stats.itemsSold} items sold · {stats.foodSavedKg} kg food diverted
-              · {stats.wasteDown}% less waste vs listed stock
+              {stats.itemsSold} items sold · {stats.foodSavedKg} kg food
+              diverted from waste
             </Text>
           </View>
 
@@ -700,23 +608,12 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: spacing.lg,
   },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: spacing.sm,
-  },
   sectionTitle: {
     fontSize: 18,
     fontWeight: "700",
     color: colors.text,
     letterSpacing: -0.2,
     marginBottom: spacing.sm,
-  },
-  editLink: {
-    fontSize: 14,
-    color: colors.primary,
-    fontWeight: "600",
   },
   card: {
     backgroundColor: colors.white,
@@ -729,32 +626,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 1,
-  },
-  hourRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 14,
-    paddingHorizontal: spacing.md,
-  },
-  hourRowBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  hourDayWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  dayText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.text,
-  },
-  hourText: {
-    fontSize: 14,
-    color: colors.textSoft,
-    fontWeight: "500",
   },
   menuRow: {
     flexDirection: "row",

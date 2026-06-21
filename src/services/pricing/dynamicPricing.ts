@@ -217,7 +217,7 @@ export function resolveListingRetail(
 
 export function isSmartPricingEnabled(item: InventoryItem): boolean {
   if (item.smartPricingEnabled === false) return false;
-  if (item.type === "bag") return item.smartPricingEnabled !== false;
+  if (item.type === "bag") return true;
   return item.smartPricingEnabled === true;
 }
 

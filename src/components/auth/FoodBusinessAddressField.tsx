@@ -5,6 +5,7 @@ import {
   formatPlaceTypeLabel,
   hasGooglePlacesApiKey,
   searchFoodPlaces,
+  searchPlaces,
   type FoodPlaceDetails,
   type FoodPlaceSuggestion,
 } from "@/src/services/places/googlePlaces";
@@ -28,6 +29,8 @@ type FoodBusinessAddressFieldProps = {
   onPlaceSelected: (place: SelectedFoodPlace | null) => void;
   disabled?: boolean;
   manualMode?: boolean;
+  /** When true, only Google Places picker is allowed (no manual text fallback). */
+  requireGooglePlace?: boolean;
   error?: string;
 };
 
@@ -38,6 +41,7 @@ export function FoodBusinessAddressField({
   onPlaceSelected,
   disabled,
   manualMode,
+  requireGooglePlace,
   error,
 }: FoodBusinessAddressFieldProps) {
   const [suggestions, setSuggestions] = useState<FoodPlaceSuggestion[]>([]);
@@ -45,8 +49,21 @@ export function FoodBusinessAddressField({
   const [loadingPlace, setLoadingPlace] = useState(false);
   const [showList, setShowList] = useState(false);
 
+  const placeTypeFallback = manualMode ? "Pickup location" : "Food business";
+  const label = manualMode
+    ? "Pickup location on Google Maps *"
+    : "Find your business on Google *";
+  const hint = requireGooglePlace
+    ? "Search and select a location from the Google Maps list — typed addresses alone are not accepted."
+    : manualMode
+      ? "Search any valid address, neighbourhood, or landmark — does not need to be a café or shop."
+      : "Search cafés, bakeries, restaurants, and food shops in Malaysia.";
+  const placeholder = manualMode
+    ? "Type area, street, or landmark…"
+    : "Type café, bakery, or restaurant name…";
+
   useEffect(() => {
-    if (manualMode || disabled) {
+    if (disabled) {
       setSuggestions([]);
       setSearching(false);
       return;
@@ -67,7 +84,9 @@ export function FoodBusinessAddressField({
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
-        const results = await searchFoodPlaces(trimmed);
+        const results = manualMode
+          ? await searchPlaces(trimmed)
+          : await searchFoodPlaces(trimmed);
         if (!cancelled) {
           setSuggestions(results);
           setShowList(true);
@@ -104,25 +123,32 @@ export function FoodBusinessAddressField({
     setShowList(true);
   };
 
-  if (manualMode) {
+  if (!hasGooglePlacesApiKey()) {
     return (
       <View style={styles.wrap}>
-        <Text style={styles.label}>Pickup area / address *</Text>
-        <Text style={styles.hint}>
-          Home-based sellers: describe where buyers can collect (neighbourhood,
-          landmark).
+        <Text style={styles.label}>{label}</Text>
+        <Text style={styles.warn}>
+          {requireGooglePlace
+            ? "Google Maps place search is required to set your location. Places API is not configured — contact support."
+            : "Places API key missing — type your full address manually below."}
         </Text>
-        <TextInput
-          style={[styles.input, error ? styles.inputError : null]}
-          value={query}
-          onChangeText={(text) => {
-            onQueryChange(text);
-            onPlaceSelected(null);
-          }}
-          placeholder="e.g. Taman Connaught, Cheras"
-          placeholderTextColor={colors.textSoft}
-          editable={!disabled}
-        />
+        {!requireGooglePlace ? (
+          <TextInput
+            style={[styles.input, error ? styles.inputError : null]}
+            value={query}
+            onChangeText={(text) => {
+              onQueryChange(text);
+              onPlaceSelected(null);
+            }}
+            placeholder={
+              manualMode
+                ? "e.g. 12, Jalan Example, Taman Connaught, Cheras"
+                : "Full business address"
+            }
+            placeholderTextColor={colors.textSoft}
+            editable={!disabled}
+          />
+        ) : null}
         <FieldError message={error} />
       </View>
     );
@@ -130,16 +156,8 @@ export function FoodBusinessAddressField({
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.label}>Find your business on Google *</Text>
-      <Text style={styles.hint}>
-        Search cafés, bakeries, restaurants, and food shops in Malaysia.
-      </Text>
-
-      {!hasGooglePlacesApiKey() ? (
-        <Text style={styles.warn}>
-          Places API key missing — type your full address manually below.
-        </Text>
-      ) : null}
+      <Text style={styles.label}>{label}</Text>
+      <Text style={styles.hint}>{hint}</Text>
 
       <View style={[styles.inputRow, error ? styles.inputRowError : null]}>
         <Search size={18} color={colors.textSoft} />
@@ -152,7 +170,7 @@ export function FoodBusinessAddressField({
             setShowList(true);
           }}
           onFocus={() => setShowList(true)}
-          placeholder="Type café, bakery, or restaurant name…"
+          placeholder={placeholder}
           placeholderTextColor={colors.textSoft}
           editable={!disabled && !loadingPlace}
         />
@@ -169,8 +187,11 @@ export function FoodBusinessAddressField({
               {selectedPlace.displayName || selectedPlace.formattedAddress}
             </Text>
             <Text style={styles.selectedMeta} numberOfLines={2}>
-              {formatPlaceTypeLabel(selectedPlace.primaryType)} ·{" "}
-              {selectedPlace.formattedAddress}
+              {formatPlaceTypeLabel(
+                selectedPlace.primaryType,
+                placeTypeFallback,
+              )}{" "}
+              · {selectedPlace.formattedAddress}
             </Text>
           </View>
           <TouchableOpacity onPress={clearSelection} disabled={disabled}>
@@ -194,12 +215,23 @@ export function FoodBusinessAddressField({
                   {item.label}
                 </Text>
                 <Text style={styles.listItemSub}>
-                  {formatPlaceTypeLabel(item.primaryType)}
+                  {formatPlaceTypeLabel(item.primaryType, placeTypeFallback)}
                 </Text>
               </View>
             </TouchableOpacity>
           ))}
         </View>
+      ) : null}
+      {requireGooglePlace &&
+      !selectedPlace &&
+      query.trim().length >= 2 &&
+      !searching &&
+      !loadingPlace ? (
+        <Text style={styles.pickHint}>
+          {suggestions.length === 0
+            ? "No Google Maps matches — try a nearby street, area, or landmark."
+            : "Select a result from the list above to confirm your location."}
+        </Text>
       ) : null}
       <FieldError message={error} />
     </View>
@@ -279,4 +311,10 @@ const styles = StyleSheet.create({
   listItemText: { flex: 1 },
   listItemTitle: { fontSize: 14, fontWeight: "600", color: colors.text },
   listItemSub: { fontSize: 12, color: colors.textSoft, marginTop: 2 },
+  pickHint: {
+    fontSize: 12,
+    color: colors.textSoft,
+    marginTop: spacing.xs,
+    lineHeight: 17,
+  },
 });

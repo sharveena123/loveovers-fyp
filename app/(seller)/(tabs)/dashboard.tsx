@@ -1,8 +1,7 @@
+import { EditListingModal } from "@/src/components/dashboard/EditListingModal";
 import { PredictionScreen } from "@/src/components/dashboard/PredictionScreen";
 import { UploadAndTrainScreen } from "@/src/components/dashboard/UploadScreen";
-import { SmartRemindersStrip } from "@/src/components/SmartRemindersStrip";
 import { Text } from "@/src/components/StyledText";
-import { useSmartReminders } from "@/src/hooks/useSmartReminders";
 import {
   DashboardStats,
   getDashboardStats,
@@ -33,8 +32,11 @@ import {
   DollarSign,
   Leaf,
   Package,
+  Pencil,
   ShoppingBag,
   Sparkles,
+  Trash2,
+  TrendingDown,
   TrendingUp,
   Zap,
 } from "lucide-react-native";
@@ -59,6 +61,25 @@ function getGreeting(): string {
   if (hour < 12) return "Good morning";
   if (hour < 17) return "Good afternoon";
   return "Good evening";
+}
+
+/** Locale-independent "1,234.56" (device locales can swap . and , around). */
+function formatRm(value: number): string {
+  const [whole, dec] = value.toFixed(2).split(".");
+  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${dec}`;
+}
+
+/** Day-over-day trend text; neutral "—" when there is no baseline to compare. */
+function formatTrend(change: number): { text: string; color: string } {
+  if (!Number.isFinite(change) || change === 0) {
+    return { text: "— vs yesterday", color: colors.textSoft };
+  }
+  const arrow = change > 0 ? "↗" : "↘";
+  const sign = change > 0 ? "+" : "−";
+  return {
+    text: `${arrow} ${sign}${Math.abs(change).toFixed(1)}%`,
+    color: change > 0 ? colors.success : colors.error,
+  };
 }
 
 function getExpiryStatus(item: InventoryItem): {
@@ -123,11 +144,15 @@ function ListingCard({
   sellerId,
   closingHour,
   variant,
+  onEdit,
+  onDelete,
 }: {
   item: InventoryItem;
   sellerId: string;
   closingHour: number;
   variant: ListingsTab;
+  onEdit: (item: InventoryItem) => void;
+  onDelete: (item: InventoryItem) => void;
 }) {
   const sold = item.sold || 0;
   const remaining = item.quantity - sold;
@@ -226,6 +251,27 @@ function ListingCard({
       <View style={styles.progressTrack}>
         <View style={[styles.progressFill, { width: `${progress}%` }]} />
       </View>
+
+      <View style={styles.cardActionsRow}>
+        <TouchableOpacity
+          style={styles.cardActionBtn}
+          onPress={() => onEdit(item)}
+          activeOpacity={0.85}
+        >
+          <Pencil size={14} color={colors.primary} />
+          <Text style={styles.cardActionText}>Edit details</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.cardActionBtn, styles.cardActionBtnDanger]}
+          onPress={() => onDelete(item)}
+          activeOpacity={0.85}
+        >
+          <Trash2 size={14} color={colors.error} />
+          <Text style={[styles.cardActionText, styles.cardActionTextDanger]}>
+            Delete
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -247,6 +293,7 @@ export default function OwnerDashboard() {
   });
   const [sellerProfile, setSellerProfile] = useState<SellerProfile | null>(null);
   const [listingsTab, setListingsTab] = useState<ListingsTab>("bag");
+  const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const inventoryRefresh = useSellerInventoryRefresh();
 
   const activeBags = useMemo(
@@ -259,17 +306,6 @@ export default function OwnerDashboard() {
   );
   const displayedListings =
     listingsTab === "bag" ? activeBags : activeItems;
-
-  const {
-    reminders: smartReminders,
-    dismissReminder,
-    refreshReminders,
-  } = useSmartReminders({
-    role: "seller",
-    userId: auth.currentUser?.uid,
-    inventory,
-    itemsExpiring: stats.itemsExpiring,
-  });
 
   const fetchDashboardData = useCallback(async (sellerId: string, silent = false) => {
     if (!silent) setLoading(true);
@@ -334,9 +370,8 @@ export default function OwnerDashboard() {
     useCallback(() => {
       if (auth.currentUser) {
         fetchDashboardData(auth.currentUser.uid, true);
-        refreshReminders();
       }
-    }, [fetchDashboardData, refreshReminders]),
+    }, [fetchDashboardData]),
   );
 
   useEffect(() => {
@@ -348,10 +383,45 @@ export default function OwnerDashboard() {
     setRefreshing(true);
     if (auth.currentUser) {
       await fetchDashboardData(auth.currentUser.uid);
-      await refreshReminders();
     }
     setRefreshing(false);
-  }, [fetchDashboardData, refreshReminders]);
+  }, [fetchDashboardData]);
+
+  const handleDeleteListing = useCallback(
+    (item: InventoryItem) => {
+      const label = item.type === "bag" ? "mystery bag" : "item";
+      Alert.alert(
+        "Delete listing",
+        `Remove "${item.name}"? Buyers will no longer see this ${label}. This cannot be undone.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              const user = auth.currentUser;
+              if (!user || !item.id) return;
+              try {
+                await inventoryService.deleteItem(user.uid, item.id);
+                setInventory((prev) => prev.filter((i) => i.id !== item.id));
+                fetchDashboardData(user.uid, true);
+              } catch (error) {
+                console.error("Error deleting listing:", error);
+                Alert.alert("Error", "Failed to delete listing. Please try again.");
+              }
+            },
+          },
+        ],
+      );
+    },
+    [fetchDashboardData],
+  );
+
+  const handleListingSaved = useCallback(() => {
+    if (auth.currentUser) {
+      fetchDashboardData(auth.currentUser.uid, true);
+    }
+  }, [fetchDashboardData]);
 
   const handleTrainingComplete = useCallback(async (cafeId: string) => {
     setTrainedCafeId(cafeId);
@@ -406,13 +476,6 @@ export default function OwnerDashboard() {
         </View>
 
         <View style={styles.body}>
-          <SmartRemindersStrip
-            reminders={smartReminders}
-            onDismiss={dismissReminder}
-            title="Shop reminders"
-            embedded
-          />
-
           <View style={styles.revenueCard}>
             <View style={styles.revenueLeft}>
               <View style={styles.revenueIconWrap}>
@@ -421,14 +484,29 @@ export default function OwnerDashboard() {
               <View>
                 <Text style={styles.revenueLabel}>Today&apos;s revenue</Text>
                 <Text style={styles.revenueValue}>
-                  RM {stats.todayRevenue.toLocaleString()}
+                  RM {formatRm(stats.todayRevenue)}
                 </Text>
               </View>
             </View>
-            <View style={styles.revenueBadge}>
-              <TrendingUp size={14} color={colors.success} />
-              <Text style={styles.revenueBadgeText}>
-                +{stats.revenueChange.toFixed(1)}%
+            <View
+              style={[
+                styles.revenueBadge,
+                stats.revenueChange === 0 && styles.revenueBadgeNeutral,
+                stats.revenueChange < 0 && styles.revenueBadgeDown,
+              ]}
+            >
+              {stats.revenueChange > 0 ? (
+                <TrendingUp size={14} color={colors.success} />
+              ) : stats.revenueChange < 0 ? (
+                <TrendingDown size={14} color={colors.error} />
+              ) : null}
+              <Text
+                style={[
+                  styles.revenueBadgeText,
+                  { color: formatTrend(stats.revenueChange).color },
+                ]}
+              >
+                {formatTrend(stats.revenueChange).text}
               </Text>
             </View>
           </View>
@@ -440,8 +518,8 @@ export default function OwnerDashboard() {
               iconBg={colors.primarySoft}
               value={String(stats.bagsSoldToday)}
               label="Bags sold"
-              change={`↗ +${stats.bagsChange.toFixed(1)}%`}
-              changeColor={colors.success}
+              change={formatTrend(stats.bagsChange).text}
+              changeColor={formatTrend(stats.bagsChange).color}
               accentColor={colors.primary}
             />
             <StatCard
@@ -449,8 +527,8 @@ export default function OwnerDashboard() {
               iconBg={colors.successSoft}
               value={`${stats.wasteReduction}%`}
               label="Waste reduced"
-              change={`↗ +${stats.wasteChange.toFixed(1)}%`}
-              changeColor={colors.success}
+              change={formatTrend(stats.wasteChange).text}
+              changeColor={formatTrend(stats.wasteChange).color}
               accentColor={colors.success}
             />
             <StatCard
@@ -574,6 +652,8 @@ export default function OwnerDashboard() {
                   sellerId={sellerProfile.uid}
                   closingHour={sellerProfile.smartPricingClosingHour ?? 20}
                   variant={listingsTab}
+                  onEdit={setEditingItem}
+                  onDelete={handleDeleteListing}
                 />
               ))
             )}
@@ -633,6 +713,13 @@ export default function OwnerDashboard() {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      <EditListingModal
+        item={editingItem}
+        onClose={() => setEditingItem(null)}
+        sellerId={sellerProfile.uid}
+        onSaved={handleListingSaved}
+      />
     </SafeAreaView>
   );
 }
@@ -764,6 +851,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     color: colors.success,
+  },
+  revenueBadgeNeutral: {
+    backgroundColor: "rgba(0,0,0,0.05)",
+  },
+  revenueBadgeDown: {
+    backgroundColor: colors.errorSoft,
   },
   sectionLabel: {
     fontSize: 13,
@@ -1079,6 +1172,35 @@ const styles = StyleSheet.create({
     height: "100%",
     backgroundColor: colors.primary,
     borderRadius: 3,
+  },
+  cardActionsRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  cardActionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: "rgba(106, 60, 0, 0.12)",
+  },
+  cardActionBtnDanger: {
+    backgroundColor: colors.errorSoft,
+    borderColor: "rgba(200, 60, 60, 0.15)",
+  },
+  cardActionText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.primary,
+  },
+  cardActionTextDanger: {
+    color: colors.error,
   },
   emptyState: {
     backgroundColor: colors.white,

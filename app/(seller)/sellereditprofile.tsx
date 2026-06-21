@@ -1,3 +1,7 @@
+import {
+  FoodBusinessAddressField,
+  type SelectedFoodPlace,
+} from "@/src/components/auth/FoodBusinessAddressField";
 import InputField from "@/src/components/InputField";
 import PrimaryButton from "@/src/components/PrimaryButton";
 import { FormField } from "@/src/components/FormField";
@@ -5,24 +9,28 @@ import { FormSubmitError } from "@/src/components/FieldError";
 import { Text } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import {
-    SellerProfile,
-    getUserProfile,
-    updateSellerProfile,
+  getUserProfile,
+  isSellerLocationChangePending,
+  isSellerPhoneChangePending,
+  SellerProfile,
+  requestSellerLocationChange,
+  requestSellerPhoneChange,
+  updateSellerProfile,
 } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
 import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
 import { goBackToReturn, SELLER_ROUTES } from "@/src/utils/navigation";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { ArrowLeft } from "lucide-react-native";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 export default function SellerEditProfile() {
@@ -36,55 +44,104 @@ export default function SellerEditProfile() {
   const [saving, setSaving] = useState(false);
   const [contactName, setContactName] = useState("");
   const [businessName, setBusinessName] = useState("");
+  const [approvedPhone, setApprovedPhone] = useState("");
   const [phone, setPhone] = useState("");
-  const [businessAddress, setBusinessAddress] = useState("");
+  const [phonePendingReview, setPhonePendingReview] = useState(false);
+  const [approvedBusinessAddress, setApprovedBusinessAddress] = useState("");
+  const [locationQuery, setLocationQuery] = useState("");
+  const [selectedPlace, setSelectedPlace] = useState<SelectedFoodPlace | null>(
+    null,
+  );
+  const [locationChangePending, setLocationChangePending] = useState(false);
+  const [pendingLocationAddress, setPendingLocationAddress] = useState("");
   const [closingHour, setClosingHour] = useState("20");
   const [errors, setErrors] = useState<FormErrors>({});
 
-  useEffect(() => {
-    if (authLoading) return;
+  const canPickNewLocation = !locationChangePending;
 
-    const fetchProfile = async () => {
-      try {
-        if (!user?.uid) {
-          Alert.alert("Error", "User not authenticated");
-          handleBack();
-          return;
+  const applySellerProfile = (sellerProfile: SellerProfile) => {
+    setContactName(sellerProfile.contactName || "");
+    setBusinessName(sellerProfile.businessName || "");
+    setApprovedPhone(sellerProfile.phone || "");
+    setApprovedBusinessAddress(sellerProfile.businessAddress || "");
+
+    const hasPendingLocation = isSellerLocationChangePending(sellerProfile);
+    setLocationChangePending(hasPendingLocation);
+    setPendingLocationAddress(
+      hasPendingLocation ? sellerProfile.pendingBusinessAddress || "" : "",
+    );
+
+    const hasPendingPhone = isSellerPhoneChangePending(sellerProfile);
+    setPhonePendingReview(hasPendingPhone);
+    setPhone(
+      hasPendingPhone
+        ? sellerProfile.pendingPhone!.trim()
+        : sellerProfile.phone || "",
+    );
+    setClosingHour(
+      String(
+        sellerProfile.smartPricingClosingHour != null
+          ? sellerProfile.smartPricingClosingHour
+          : 20,
+      ),
+    );
+
+    if (!hasPendingLocation) {
+      setLocationQuery("");
+      setSelectedPlace(null);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (authLoading) return;
+
+      const fetchProfile = async () => {
+        try {
+          if (!user?.uid) {
+            router.replace("/");
+            return;
+          }
+
+          const userProfile = await getUserProfile(user.uid);
+          if (userProfile && userProfile.role === "seller") {
+            applySellerProfile(userProfile as SellerProfile);
+          }
+        } catch (error) {
+          console.error("Error fetching profile:", error);
+          Alert.alert("Error", "Failed to load profile");
+        } finally {
+          setLoading(false);
         }
+      };
 
-        const userProfile = await getUserProfile(user.uid);
-        if (userProfile && userProfile.role === "seller") {
-          const sellerProfile = userProfile as SellerProfile;
-          setContactName(sellerProfile.contactName || "");
-          setBusinessName(sellerProfile.businessName || "");
-          setPhone(sellerProfile.phone || "");
-          setBusinessAddress(sellerProfile.businessAddress || "");
-          setClosingHour(
-            String(
-              sellerProfile.smartPricingClosingHour != null
-                ? sellerProfile.smartPricingClosingHour
-                : 20,
-            ),
-          );
-        }
-      } catch (error) {
-        console.error("Error fetching profile:", error);
-        Alert.alert("Error", "Failed to load profile");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchProfile();
-  }, [user?.uid, authLoading]);
+      setLoading(true);
+      fetchProfile();
+    }, [user?.uid, authLoading]),
+  );
 
   const handleSave = async () => {
     const nextErrors: FormErrors = {};
-    if (!contactName.trim()) nextErrors.contactName = "Please enter your contact name";
-    if (!businessName.trim()) nextErrors.businessName = "Please enter your business name";
+    if (!contactName.trim()) {
+      nextErrors.contactName = "Please enter your contact name";
+    }
     if (!phone.trim()) nextErrors.phone = "Please enter your phone number";
-    if (!businessAddress.trim())
-      nextErrors.businessAddress = "Please enter your business address";
+
+    if (
+      canPickNewLocation &&
+      (locationQuery.trim() || selectedPlace)
+    ) {
+      if (!selectedPlace?.placeId) {
+        nextErrors.businessAddress =
+          "Select a valid location from the Google Maps suggestions";
+      } else if (
+        selectedPlace.formattedAddress.trim() ===
+        approvedBusinessAddress.trim()
+      ) {
+        nextErrors.businessAddress =
+          "Choose a different location from your current one";
+      }
+    }
 
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
@@ -94,30 +151,74 @@ export default function SellerEditProfile() {
     setErrors({});
     try {
       setSaving(true);
-      if (user?.uid) {
-        const h = parseInt(closingHour.trim(), 10);
-        const smartHour =
-          Number.isFinite(h) && h >= 12 && h <= 23 ? h : 20;
-        await updateSellerProfile(user.uid, {
-          contactName: contactName.trim(),
-          businessName: businessName.trim(),
-          phone: phone.trim(),
-          businessAddress: businessAddress.trim(),
-          smartPricingClosingHour: smartHour,
-        });
-        Alert.alert("Success", "Profile updated successfully", [
-          {
-            text: "OK",
-            onPress: handleBack,
-          },
-        ]);
+      if (!user?.uid) return;
+
+      const h = parseInt(closingHour.trim(), 10);
+      const smartHour = Number.isFinite(h) && h >= 12 && h <= 23 ? h : 20;
+
+      await updateSellerProfile(user.uid, {
+        contactName: contactName.trim(),
+        smartPricingClosingHour: smartHour,
+      });
+
+      const trimmedPhone = phone.trim();
+      const phoneChanged = trimmedPhone !== approvedPhone.trim();
+      let phoneSubmitted = false;
+
+      if (phoneChanged) {
+        await requestSellerPhoneChange(user.uid, trimmedPhone);
+        setPhonePendingReview(true);
+        phoneSubmitted = true;
       }
+
+      let locationSubmitted = false;
+      if (canPickNewLocation && selectedPlace?.placeId) {
+        await requestSellerLocationChange(user.uid, {
+          businessAddress: selectedPlace.formattedAddress,
+          latitude: selectedPlace.latitude,
+          longitude: selectedPlace.longitude,
+          googlePlaceId: selectedPlace.placeId,
+          googleMapsLink: selectedPlace.googleMapsUri,
+        });
+        setLocationChangePending(true);
+        setPendingLocationAddress(selectedPlace.formattedAddress);
+        setLocationQuery("");
+        setSelectedPlace(null);
+        locationSubmitted = true;
+      }
+
+      let message = "Profile updated successfully";
+      if (phoneSubmitted && locationSubmitted) {
+        message =
+          "Profile saved. Your new phone number and location were submitted for admin review in Firebase.";
+      } else if (phoneSubmitted) {
+        message =
+          "Profile saved. Your new phone number was submitted for admin review — your current number stays active until it is approved.";
+      } else if (locationSubmitted) {
+        message =
+          "Your new location was submitted for admin review. Your current address stays active until it is approved.";
+      }
+
+      Alert.alert("Success", message, [
+        { text: "OK", onPress: handleBack },
+      ]);
     } catch (error) {
       console.error("Error saving profile:", error);
-      setErrors({ submit: "Failed to save profile. Please try again." });
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to save profile. Please try again.";
+      setErrors({ submit: message });
     } finally {
       setSaving(false);
     }
+  };
+
+  const locationHelperText = () => {
+    if (locationChangePending) {
+      return `New location pending admin approval in Firebase. Active address: ${approvedBusinessAddress || "—"}`;
+    }
+    return "To change address, search Google Maps, select a result, and save. Admin approves once in Firebase Console.";
   };
 
   if (loading || authLoading) {
@@ -134,19 +235,14 @@ export default function SellerEditProfile() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity
-            onPress={handleBack}
-            style={styles.backButton}
-          >
+          <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <ArrowLeft size={24} color={colors.white} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Edit Profile</Text>
           <View style={{ width: 24 }} />
         </View>
 
-        {/* Form Section */}
         <View style={styles.formContainer}>
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Business Information</Text>
@@ -165,19 +261,24 @@ export default function SellerEditProfile() {
               />
             </FormField>
 
-            <FormField label="Business Name" error={errors.businessName}>
-              <InputField
-                value={businessName}
-                onChangeText={(text) => {
-                  setBusinessName(text);
-                  setErrors((prev) => clearFieldError(prev, "businessName"));
-                }}
-                placeholder="Enter your business name"
-                hasError={!!errors.businessName}
-              />
+            <FormField
+              label="Business Name"
+              helperText="Contact support to change your registered business name"
+            >
+              <View style={styles.disabledInput}>
+                <Text style={styles.disabledText}>{businessName || "—"}</Text>
+              </View>
             </FormField>
 
-            <FormField label="Phone Number" error={errors.phone}>
+            <FormField
+              label="Phone Number"
+              error={errors.phone}
+              helperText={
+                phonePendingReview
+                  ? `Pending admin review. Active number: ${approvedPhone || "—"}`
+                  : "Changes require admin approval before your listed number updates."
+              }
+            >
               <InputField
                 value={phone}
                 onChangeText={(text) => {
@@ -190,16 +291,52 @@ export default function SellerEditProfile() {
               />
             </FormField>
 
-            <FormField label="Business Address" error={errors.businessAddress}>
-              <InputField
-                value={businessAddress}
-                onChangeText={(text) => {
-                  setBusinessAddress(text);
-                  setErrors((prev) => clearFieldError(prev, "businessAddress"));
-                }}
-                placeholder="Enter your business address"
-                hasError={!!errors.businessAddress}
-              />
+            <FormField
+              label="Current address"
+              helperText={locationHelperText()}
+              error={errors.businessAddress}
+            >
+              <View
+                style={[styles.disabledInput, styles.disabledInputMultiline]}
+              >
+                <Text style={styles.disabledText}>
+                  {approvedBusinessAddress || "—"}
+                </Text>
+              </View>
+
+              {locationChangePending && pendingLocationAddress ? (
+                <View style={styles.pendingCard}>
+                  <Text style={styles.pendingLabel}>Pending new location</Text>
+                  <Text style={styles.pendingValue}>{pendingLocationAddress}</Text>
+                </View>
+              ) : null}
+
+              {canPickNewLocation ? (
+                <View style={styles.newLocationWrap}>
+                  <FoodBusinessAddressField
+                    query={locationQuery}
+                    onQueryChange={(text) => {
+                      setLocationQuery(text);
+                      setErrors((prev) =>
+                        clearFieldError(prev, "businessAddress"),
+                      );
+                    }}
+                    selectedPlace={selectedPlace}
+                    onPlaceSelected={(place) => {
+                      setSelectedPlace(place);
+                      if (place) {
+                        setLocationQuery(place.formattedAddress);
+                      }
+                      setErrors((prev) =>
+                        clearFieldError(prev, "businessAddress"),
+                      );
+                    }}
+                    manualMode={true}
+                    requireGooglePlace={true}
+                    error={errors.businessAddress}
+                  />
+                </View>
+              ) : null}
             </FormField>
 
             <FormField
@@ -286,15 +423,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: spacing.md,
   },
-  formGroup: {
-    marginBottom: spacing.md,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: "500",
-    color: colors.text,
-    marginBottom: spacing.sm,
-  },
   disabledInput: {
     width: "100%",
     borderWidth: 1,
@@ -305,14 +433,35 @@ const styles = StyleSheet.create({
     backgroundColor: "#f5f5f5",
     justifyContent: "center",
   },
+  disabledInputMultiline: {
+    minHeight: 72,
+    alignItems: "flex-start",
+  },
   disabledText: {
     fontSize: 14,
     color: colors.textSoft,
   },
-  helperText: {
+  pendingCard: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 8,
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: "rgba(106,60,0,0.2)",
+  },
+  pendingLabel: {
     fontSize: 12,
+    fontWeight: "600",
     color: colors.textSoft,
-    marginTop: spacing.xs,
+    marginBottom: 4,
+  },
+  pendingValue: {
+    fontSize: 14,
+    color: colors.text,
+    lineHeight: 20,
+  },
+  newLocationWrap: {
+    marginTop: spacing.md,
   },
   buttonContainer: {
     marginTop: spacing.lg,

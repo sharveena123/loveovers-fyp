@@ -94,8 +94,10 @@ export default function SellerRegisterScreen() {
       } else if (!businessAddress.trim()) {
         next.businessAddress = "Enter or select your business address";
       }
+    } else if (!selectedPlace && hasGooglePlacesApiKey()) {
+      next.businessAddress = "Pick your pickup location from Google Maps";
     } else if (!businessAddress.trim()) {
-      next.businessAddress = "Enter your pickup area or address";
+      next.businessAddress = "Enter or select your pickup location";
     }
 
     return next;
@@ -125,7 +127,11 @@ export default function SellerRegisterScreen() {
 
   const handlePlaceSelected = (place: SelectedFoodPlace | null) => {
     setSelectedPlace(place);
-    if (place?.displayName && !businessName.trim()) {
+    if (
+      place?.displayName &&
+      !businessName.trim() &&
+      !useManualVerification
+    ) {
       setBusinessName(place.displayName);
     }
     if (place) {
@@ -208,6 +214,17 @@ export default function SellerRegisterScreen() {
         msg = "This email is already registered.";
       } else if (err.code === "auth/weak-password") {
         msg = "Password is too weak.";
+      } else if (err.code === "permission-denied") {
+        msg =
+          "Could not save your application. Please sign out and try again, or contact support.";
+      } else if (err.message?.includes("Could not read image file")) {
+        msg =
+          "One of your photos could not be uploaded. Please re-select your images and try again.";
+      } else if (
+        err.message?.includes("invalid data") ||
+        err.message?.includes("undefined")
+      ) {
+        msg = "Could not save your application. Please try again.";
       }
       setErrors({ submit: msg });
     } finally {
@@ -361,12 +378,11 @@ export default function SellerRegisterScreen() {
                   ) : null}
                 </View>
                 <View style={styles.manualTextWrap}>
-                  <Text style={styles.manualTitle}>
-                    Home-based / not on Google Maps
-                  </Text>
+                  <Text style={styles.manualTitle}>Home-based seller</Text>
                   <Text style={styles.manualDesc}>
-                    Use manual verification instead — our team will review your
-                    photos and description (pending approval).
+                    For home kitchens and small bakeries without a shopfront.
+                    Pick your pickup area on Google Maps — our team will review
+                    your photos before approval.
                   </Text>
                 </View>
               </TouchableOpacity>

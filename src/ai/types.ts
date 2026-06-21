@@ -280,6 +280,7 @@ export type FunnelStage = {
 
 export type SurplusPoint = {
   label: string;
+  date: string;
   surplus: number;
   sold: number;
 };
@@ -311,7 +312,12 @@ export type DatasetAnalyticsBundle = {
   topSellingItems: ItemWasteRow[];
   wasteAnalysis: ItemWasteRow[];
   revenueByCategory: { label: string; value: number; color: string }[];
-  actualVsPredicted: { label: string; actual: number; predicted: number }[];
+  actualVsPredicted: {
+    label: string;
+    date: string;
+    actual: number;
+    predicted: number;
+  }[];
   surplusTrend: SurplusPoint[];
   scatterData: ScatterPoint[];
   heatmap: HeatmapCell[];

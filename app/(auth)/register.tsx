@@ -8,7 +8,9 @@ import { createBuyerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
 import {
     clearFieldError,
-    FormErrors
+    FormErrors,
+    hasFormErrors,
+    validateRegistrationForm,
 } from "@/src/utils/formValidation";
 import { router } from "expo-router";
 import { createUserWithEmailAndPassword } from "firebase/auth";
@@ -51,22 +53,15 @@ export default function RegisterScreen() {
       return;
     }
 
-    const nextErrors: FormErrors = {};
+    const nextErrors = validateRegistrationForm({
+      contactName,
+      email,
+      phone,
+      password,
+      confirmPassword,
+    });
 
-    if (!contactName.trim()) nextErrors.contactName = "Full name is required";
-    if (!email.trim()) nextErrors.email = "Email is required";
-    else if (!email.includes("@"))
-      nextErrors.email = "Enter a valid email address";
-    if (!phone.trim()) nextErrors.phone = "Phone number is required";
-    if (!password) nextErrors.password = "Password is required";
-    else if (password.length < 6)
-      nextErrors.password = "Password must be at least 6 characters";
-    if (!confirmPassword)
-      nextErrors.confirmPassword = "Please confirm your password";
-    else if (password !== confirmPassword)
-      nextErrors.confirmPassword = "Passwords do not match";
-
-    if (Object.keys(nextErrors).length > 0) {
+    if (hasFormErrors(nextErrors)) {
       setErrors(nextErrors);
       return;
     }

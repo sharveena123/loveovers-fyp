@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { batchPredict, getCafeInfo, predictForCafe } from "../../ai/api";
+import { getAiErrorMessage, isAiNotFoundError } from "../../ai/errors";
 import { BatchPredictionResponse, PredictionResponse } from "../../ai/types";
 import { DailySalesEntryScreen } from "./DailySalesEntryScreen";
 
@@ -87,16 +88,10 @@ export function PredictionScreen({
       );
       if (info.items.length > 0) setSelectedItem(info.items[0]);
     } catch (error: unknown) {
-      const err = error as { message?: string; status?: number };
-      if (err?.message?.includes("404") || err?.status === 404) {
-        Alert.alert(
-          "Sales file needed",
-          "We could not find your sales history. Please upload your sales file again.",
-          [{ text: "OK" }],
-        );
+      const { title, message } = getAiErrorMessage(error, "load");
+      Alert.alert(title, message, [{ text: "OK" }]);
+      if (isAiNotFoundError(error)) {
         onModelNotFound?.();
-      } else {
-        Alert.alert("Could not load", "Please try again in a moment.");
       }
     } finally {
       setLoadingCafe(false);
@@ -119,7 +114,8 @@ export function PredictionScreen({
       });
       setResult(response);
     } catch (error) {
-      Alert.alert("Could not get suggestion", String(error));
+      const { title, message } = getAiErrorMessage(error, "predict");
+      Alert.alert(title, message);
     } finally {
       setLoading(false);
     }
@@ -137,7 +133,8 @@ export function PredictionScreen({
       const response = await batchPredict(cafeId, selectedDay as "Monday");
       setBatchResult(response);
     } catch (error) {
-      Alert.alert("Could not get menu plan", String(error));
+      const { title, message } = getAiErrorMessage(error, "batch_predict");
+      Alert.alert(title, message);
     } finally {
       setLoading(false);
     }

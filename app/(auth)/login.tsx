@@ -7,7 +7,12 @@ import { auth } from "@/src/services/firebase/config";
 import { getSellerPostAuthRoute } from "@/src/services/firebase/sellerRegistration";
 import { getUserProfile, SellerProfile } from "@/src/services/firebase/user";
 import { colors, spacing } from "@/src/theme/styles";
-import { clearFieldError, FormErrors } from "@/src/utils/formValidation";
+import {
+  clearFieldError,
+  FormErrors,
+  hasFormErrors,
+  validateLoginForm,
+} from "@/src/utils/formValidation";
 import { router } from "expo-router";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { ChevronLeft, Eye, Lock, Mail } from "lucide-react-native";
@@ -22,19 +27,9 @@ export default function LoginScreen() {
   const [errors, setErrors] = useState<FormErrors>({});
 
   const handleLogin = async () => {
-    const nextErrors: FormErrors = {};
+    const nextErrors = validateLoginForm({ email, password });
 
-    if (!email.trim()) {
-      nextErrors.email = "Email is required";
-    } else if (!email.includes("@")) {
-      nextErrors.email = "Enter a valid email address";
-    }
-
-    if (!password.trim()) {
-      nextErrors.password = "Password is required";
-    }
-
-    if (Object.keys(nextErrors).length > 0) {
+    if (hasFormErrors(nextErrors)) {
       setErrors(nextErrors);
       return;
     }

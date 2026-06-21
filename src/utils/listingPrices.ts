@@ -1,5 +1,6 @@
 import type { AvailableBag } from "@/src/services/firebase/buyerInventory";
 import type { InventoryItem } from "@/src/services/firebase/inventoryServices";
+import { resolveListingRetail } from "@/src/services/pricing/dynamicPricing";
 
 /** Seller-published sale floor before extra smart-pricing markdown. */
 export function getListingFloor(
@@ -28,10 +29,9 @@ function roundMoney(value: number): number {
 /**
  * Resolves buyer-facing prices: sale = live price; compare-at = retail.
  *
- * The strikethrough (compare-at) and the discount % must share the same base,
- * otherwise the badge contradicts the prices on screen. Both are anchored to
- * retail — the same base checkout uses for "Saving RM X" — so the rate shown
- * always equals (compareAt - sale) / compareAt.
+ * Discount % is always (retail − sale) / retail, using the same retail
+ * resolver as live pricing. The list floor is never used as retail — that
+ * was causing badges to show a smaller % than the strikethrough price implied.
  */
 export function resolveBuyerPriceDisplay(
   bag: Pick<
@@ -43,8 +43,16 @@ export function resolveBuyerPriceDisplay(
     bag.listFloorPrice ?? getListingFloor(bag),
   );
   const salePrice = roundMoney(bag.price ?? bag.discountedPrice ?? listFloor);
+
   const retail = roundMoney(
-    Math.max(bag.originalPrice ?? salePrice, salePrice, listFloor),
+    resolveListingRetail(
+      {
+        originalPrice: bag.originalPrice,
+        price: listFloor,
+        discountedPrice: listFloor,
+      },
+      listFloor,
+    ),
   );
 
   const compareAtPrice = retail > salePrice + 0.004 ? retail : null;

@@ -5,6 +5,7 @@ import {
   recordDailySales,
   retrainCafe,
 } from "@/src/ai/api";
+import { getAiErrorMessage } from "@/src/ai/errors";
 import { DayOfWeek, RecordDailySalesResponse, Weather } from "@/src/ai/types";
 import { colors, spacing } from "@/src/theme/styles";
 import { suggestedSimulatorDiscountPct } from "@/src/services/pricing/dynamicPricing";
@@ -126,7 +127,8 @@ export function DailySalesEntryScreen({
       setDatasetRows(summary?.total_rows ?? info.training_rows ?? 0);
       setManualRows(summary?.manual_rows ?? 0);
     } catch (error) {
-      Alert.alert("Error", `Could not load café data: ${String(error)}`);
+      const { title, message } = getAiErrorMessage(error, "load");
+      Alert.alert(title, message);
     } finally {
       setLoading(false);
     }
@@ -219,7 +221,8 @@ export function DailySalesEntryScreen({
         return cleared;
       });
     } catch (error) {
-      Alert.alert("Save failed", String(error));
+      const { title, message } = getAiErrorMessage(error, "save_sales");
+      Alert.alert(title, message);
     } finally {
       setSaving(false);
     }
@@ -235,7 +238,8 @@ export function DailySalesEntryScreen({
       );
       onSaved?.();
     } catch (error) {
-      Alert.alert("Retrain failed", String(error));
+      const { title, message } = getAiErrorMessage(error, "retrain");
+      Alert.alert(title, message);
     } finally {
       setSaving(false);
     }

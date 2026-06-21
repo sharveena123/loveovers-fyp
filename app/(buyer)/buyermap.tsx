@@ -3,12 +3,15 @@ import {
   AvailableBag,
   getAvailableBags,
 } from "@/src/services/firebase/buyerInventory";
+import {
+  resolveSellerLocationHeroImage,
+} from "@/src/services/places/googlePlaces";
 import { colors, spacing } from "@/src/theme/styles";
 import { getPreferredLocation } from "@/src/utils/locationPreference";
 import { resolveBuyerPriceDisplay } from "@/src/utils/listingPrices";
 import * as Location from "expo-location";
 import { BUYER_ROUTES, pushWithReturn } from "@/src/utils/navigation";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import {
   ChevronRight,
   Clock,
@@ -19,7 +22,7 @@ import {
   TrendingDown,
   X,
 } from "lucide-react-native";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -43,6 +46,9 @@ type ShopOnMap = {
   minPrice: number;
   maxDiscount: number;
   imageUrl?: string;
+  googlePlaceId?: string;
+  businessAddress?: string;
+  sellerRegistrationPhotoUrl?: string;
   categories: string[];
 };
 
@@ -85,6 +91,9 @@ function groupBagsIntoShops(bags: AvailableBag[]): ShopOnMap[] {
       minPrice: Math.min(...sorted.map((i) => getBagPrice(i))),
       maxDiscount: Math.max(...discounts, 0),
       imageUrl: withImage?.imageUrl,
+      googlePlaceId: first.googlePlaceId,
+      businessAddress: first.businessAddress,
+      sellerRegistrationPhotoUrl: first.sellerRegistrationPhotoUrl,
       categories,
     };
   });
@@ -109,9 +118,12 @@ function navigateToBag(bag: AvailableBag) {
 }
 
 export default function BuyerMap() {
+  const mapRef = useRef<MapView>(null);
   const [bags, setBags] = useState<AvailableBag[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedShop, setSelectedShop] = useState<ShopOnMap | null>(null);
+  const [heroImageUrl, setHeroImageUrl] = useState<string | null>(null);
+  const [heroImageLoading, setHeroImageLoading] = useState(false);
   const [region, setRegion] = useState({
     latitude: 3.139,
     longitude: 101.6869,
@@ -121,8 +133,34 @@ export default function BuyerMap() {
 
   const shops = useMemo(() => groupBagsIntoShops(bags), [bags]);
 
-  const initMap = useCallback(async () => {
+  const fitMapToShops = useCallback(
+    (
+      userCoords: { latitude: number; longitude: number },
+      groupedShops: ShopOnMap[],
+    ) => {
+      if (!mapRef.current || groupedShops.length === 0) return;
+
+      const coordinates = [
+        userCoords,
+        ...groupedShops.map((shop) => ({
+          latitude: shop.latitude,
+          longitude: shop.longitude,
+        })),
+      ];
+
+      requestAnimationFrame(() => {
+        mapRef.current?.fitToCoordinates(coordinates, {
+          edgePadding: { top: 120, right: 48, bottom: 180, left: 48 },
+          animated: true,
+        });
+      });
+    },
+    [],
+  );
+
+  const loadMapData = useCallback(async () => {
     try {
+      setLoading(true);
       const preferredLocation = await getPreferredLocation();
 
       const loc = preferredLocation
@@ -139,30 +177,74 @@ export default function BuyerMap() {
         longitudeDelta: 0.06,
       });
 
-      const nearbyBags = await getAvailableBags(loc);
+      const nearbyBags = await getAvailableBags({
+        ...loc,
+        locationLabel: preferredLocation?.label,
+      });
       setBags(nearbyBags);
 
-      if (nearbyBags.length > 0) {
-        const grouped = groupBagsIntoShops(nearbyBags);
-        if (grouped.length > 0) {
-          setRegion({
-            latitude: grouped[0].latitude,
-            longitude: grouped[0].longitude,
-            latitudeDelta: 0.08,
-            longitudeDelta: 0.08,
-          });
-        }
+      const grouped = groupBagsIntoShops(nearbyBags);
+      if (grouped.length > 0) {
+        fitMapToShops(loc, grouped);
       }
     } catch (err) {
       console.error("Error loading map data:", err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fitMapToShops]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadMapData();
+    }, [loadMapData]),
+  );
 
   useEffect(() => {
-    initMap();
-  }, [initMap]);
+    if (!selectedShop) {
+      setHeroImageUrl(null);
+      setHeroImageLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setHeroImageLoading(true);
+    setHeroImageUrl(selectedShop.sellerRegistrationPhotoUrl ?? null);
+
+    resolveSellerLocationHeroImage(
+      selectedShop.latitude,
+      selectedShop.longitude,
+      selectedShop.googlePlaceId,
+    )
+      .then((url) => {
+        if (!cancelled) {
+          setHeroImageUrl(
+            url ??
+              selectedShop.sellerRegistrationPhotoUrl ??
+              selectedShop.imageUrl ??
+              null,
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHeroImageUrl(
+            selectedShop.sellerRegistrationPhotoUrl ??
+              selectedShop.imageUrl ??
+              null,
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setHeroImageLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedShop]);
 
   const getLocation = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -211,9 +293,10 @@ export default function BuyerMap() {
       <SafeAreaView style={styles.container}>
         <View style={styles.centered}>
           <MapPin size={40} color={colors.primary} />
-          <Text style={styles.fallbackTitle}>No shops on the map yet</Text>
+          <Text style={styles.fallbackTitle}>No shops in your area</Text>
           <Text style={styles.fallbackText}>
-            Sellers need a business address and active listings to appear here.
+            Listings are limited to sellers in your state. Change your location
+            on home to browse another area.
           </Text>
           <TouchableOpacity
             style={styles.fallbackBtn}
@@ -229,6 +312,7 @@ export default function BuyerMap() {
   return (
     <SafeAreaView style={styles.container}>
       <MapView
+        ref={mapRef}
         style={styles.map}
         region={region}
         onRegionChangeComplete={setRegion}
@@ -244,6 +328,8 @@ export default function BuyerMap() {
                 latitude: shop.latitude,
                 longitude: shop.longitude,
               }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
               onPress={(e) => {
                 e.stopPropagation();
                 selectShop(shop);
@@ -297,14 +383,21 @@ export default function BuyerMap() {
           </TouchableOpacity>
 
           <View style={styles.previewHero}>
-            {selectedShop.imageUrl ? (
+            {heroImageLoading && !heroImageUrl ? (
+              <View style={styles.previewImagePlaceholder}>
+                <ActivityIndicator size="large" color={colors.primary} />
+              </View>
+            ) : heroImageUrl ? (
               <Image
-                source={{ uri: selectedShop.imageUrl }}
+                source={{ uri: heroImageUrl }}
                 style={styles.previewImage}
               />
             ) : (
               <View style={styles.previewImagePlaceholder}>
-                <Store size={40} color={colors.primary} />
+                <MapPin size={40} color={colors.primary} />
+                <Text style={styles.previewImageFallback}>
+                  Location photo unavailable
+                </Text>
               </View>
             )}
             <View style={styles.previewHeroOverlay} />
@@ -325,6 +418,12 @@ export default function BuyerMap() {
           >
           <View style={styles.previewBody}>
             <Text style={styles.previewName}>{selectedShop.sellerName}</Text>
+
+            {selectedShop.businessAddress ? (
+              <Text style={styles.previewAddress} numberOfLines={2}>
+                {selectedShop.businessAddress}
+              </Text>
+            ) : null}
 
             <View style={styles.previewMeta}>
               <Star size={14} color="#FFC107" fill="#FFC107" />
@@ -441,7 +540,12 @@ export default function BuyerMap() {
               onPress={() => selectShop(shop)}
               activeOpacity={0.9}
             >
-              {shop.imageUrl ? (
+              {shop.sellerRegistrationPhotoUrl ? (
+                <Image
+                  source={{ uri: shop.sellerRegistrationPhotoUrl }}
+                  style={styles.shopChipImage}
+                />
+              ) : shop.imageUrl ? (
                 <Image source={{ uri: shop.imageUrl }} style={styles.shopChipImage} />
               ) : (
                 <View style={styles.shopChipPlaceholder}>
@@ -645,6 +749,13 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  previewImageFallback: {
+    fontSize: 12,
+    color: colors.textSoft,
+    textAlign: "center",
   },
   previewHeroOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -677,6 +788,13 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: colors.text,
     marginBottom: 6,
+    paddingRight: 36,
+  },
+  previewAddress: {
+    fontSize: 13,
+    color: colors.textSoft,
+    lineHeight: 18,
+    marginBottom: spacing.sm,
     paddingRight: 36,
   },
   previewMeta: {

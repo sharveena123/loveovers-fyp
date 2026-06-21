@@ -2,12 +2,14 @@ import { Text, TextInput } from "@/src/components/StyledText";
 import { useAuth } from "@/src/hooks/useAuth";
 import { BuyerOrder, getBuyerOrders } from "@/src/services/firebase/orders";
 import { colors, spacing } from "@/src/theme/styles";
+import { generateAndShareOrderReceipt } from "@/src/utils/orderReceipt";
 import { router, useFocusEffect } from "expo-router";
 import {
   AlertCircle,
   CheckCircle2,
   ChevronRight,
   Clock,
+  Download,
   Package,
   Search,
   ShoppingBag,
@@ -19,6 +21,7 @@ import {
 import React, { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   RefreshControl,
   SafeAreaView,
@@ -137,6 +140,7 @@ function FilterChip({
 }
 
 function OrderCard({ order }: { order: BuyerOrder }) {
+  const [receiptLoading, setReceiptLoading] = useState(false);
   const statusStyle = getStatusStyle(order.orderStatus);
   const sellerName = order.items[0]?.sellerName || "Seller";
   const itemCount = order.items.reduce((sum, i) => sum + i.quantity, 0);
@@ -144,6 +148,22 @@ function OrderCard({ order }: { order: BuyerOrder }) {
     order.items.length === 1
       ? order.items[0].name
       : `${order.items[0]?.name ?? "Items"} +${order.items.length - 1} more`;
+  const isCompleted = order.orderStatus === "delivered";
+
+  const handleDownloadReceipt = async () => {
+    setReceiptLoading(true);
+    try {
+      await generateAndShareOrderReceipt(order);
+    } catch (error) {
+      console.error("Receipt generation failed:", error);
+      Alert.alert(
+        "Could not generate receipt",
+        "Please try again in a moment.",
+      );
+    } finally {
+      setReceiptLoading(false);
+    }
+  };
 
   return (
     <View style={styles.orderCard}>
@@ -210,6 +230,24 @@ function OrderCard({ order }: { order: BuyerOrder }) {
           </Text>
         </View>
       )}
+
+      {isCompleted ? (
+        <TouchableOpacity
+          style={styles.receiptBtn}
+          onPress={handleDownloadReceipt}
+          disabled={receiptLoading}
+          activeOpacity={0.85}
+        >
+          {receiptLoading ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Download size={18} color={colors.primary} />
+          )}
+          <Text style={styles.receiptBtnText}>
+            {receiptLoading ? "Generating receipt…" : "Download digital receipt"}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -702,6 +740,23 @@ const styles = StyleSheet.create({
     color: colors.error,
     fontWeight: "600",
     lineHeight: 17,
+  },
+  receiptBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm + 2,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: colors.primarySoft,
+  },
+  receiptBtnText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.primary,
   },
   emptyState: {
     alignItems: "center",

@@ -50,8 +50,8 @@ export default function BuyerPreferencesScreen() {
     const fetchPreferences = async () => {
       try {
         if (!user?.uid) {
-          Alert.alert("Error", "User not authenticated");
-          handleBack();
+          // Signed out (e.g. logout while this screen is in the stack) — leave quietly.
+          router.replace("/");
           return;
         }
 

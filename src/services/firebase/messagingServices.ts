@@ -353,11 +353,13 @@ export const getMessages = async (conversationId: string) => {
     );
 
     const snapshot = await getDocs(q);
+    // Spread data first: stored messages carry an empty `id` field that must
+    // not overwrite the real document id (read receipts depend on it).
     return snapshot.docs.map(
       (doc) =>
         ({
-          id: doc.id,
           ...doc.data(),
+          id: doc.id,
         }) as Message & { id: string },
     );
   } catch (error) {
@@ -451,8 +453,8 @@ export const subscribeToMessages = (
       const messages = snapshot.docs.map(
         (doc) =>
           ({
-            id: doc.id,
             ...doc.data(),
+            id: doc.id,
           }) as Message & { id: string },
       );
       callback(messages);

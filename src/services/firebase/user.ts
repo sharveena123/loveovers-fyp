@@ -1,8 +1,10 @@
 import { db } from "@/src/services/firebase/config";
 import * as Location from "expo-location";
 import {
+  deleteField,
   doc,
   getDoc,
+  getDocFromServer,
   setDoc,
   Timestamp,
   updateDoc,
@@ -69,6 +71,15 @@ export interface ManualVerificationData {
   businessDescription: string;
 }
 
+export type SellerPhoneChangeStatus = "pending" | "approved" | "rejected";
+
+export type SellerLocationEditPermissionStatus =
+  | "pending"
+  | "approved"
+  | "rejected";
+
+export type SellerLocationChangeStatus = "pending" | "approved" | "rejected";
+
 export interface SellerProfile {
   uid: string;
   email: string;
@@ -77,6 +88,25 @@ export interface SellerProfile {
   businessName: string;
   phone: string;
   businessAddress: string;
+  /** New number awaiting manual admin approval (does not replace `phone` until approved). */
+  pendingPhone?: string;
+  pendingPhoneStatus?: SellerPhoneChangeStatus;
+  pendingPhoneSubmittedAt?: Timestamp | Date;
+  /** Seller asked admin for permission to edit their location. */
+  locationEditPermissionStatus?: SellerLocationEditPermissionStatus;
+  locationEditPermissionRequestedAt?: Timestamp | Date;
+  locationEditPermissionReviewedAt?: Timestamp | Date;
+  locationEditPermissionReviewNote?: string;
+  /** Proposed location awaiting admin approval (active address unchanged until approved). */
+  pendingLocationStatus?: SellerLocationChangeStatus;
+  pendingBusinessAddress?: string;
+  pendingLatitude?: number;
+  pendingLongitude?: number;
+  pendingGooglePlaceId?: string;
+  pendingGoogleMapsLink?: string;
+  pendingLocationSubmittedAt?: Timestamp | Date;
+  pendingLocationReviewedAt?: Timestamp | Date;
+  pendingLocationReviewNote?: string;
   profileImageUrl?: string;
   verificationType?: SellerVerificationType;
   verificationStatus?: SellerVerificationStatus;
@@ -98,6 +128,60 @@ export interface SellerProfile {
 }
 
 export type UserProfile = BuyerProfile | SellerProfile;
+
+const SELLER_MIRROR_FIELDS = [
+  "businessAddress",
+  "phone",
+  "verificationStatus",
+  "verificationType",
+  "pendingPhone",
+  "pendingPhoneStatus",
+  "pendingPhoneSubmittedAt",
+  "pendingLocationStatus",
+  "pendingBusinessAddress",
+  "pendingLatitude",
+  "pendingLongitude",
+  "pendingGooglePlaceId",
+  "pendingGoogleMapsLink",
+  "pendingLocationSubmittedAt",
+  "pendingLocationReviewedAt",
+  "pendingLocationReviewNote",
+  "locationEditPermissionStatus",
+  "locationEditPermissionRequestedAt",
+  "locationEditPermissionReviewedAt",
+  "locationEditPermissionReviewNote",
+] as const;
+
+function mergeSellerMirror(
+  profile: SellerProfile,
+  sellerData: Record<string, unknown>,
+): SellerProfile {
+  const merged: SellerProfile = { ...profile };
+  for (const key of SELLER_MIRROR_FIELDS) {
+    if (sellerData[key] !== undefined) {
+      (merged as Record<string, unknown>)[key] = sellerData[key];
+    }
+  }
+  return merged;
+}
+
+export function isSellerLocationChangePending(
+  profile: SellerProfile,
+): boolean {
+  const pendingAddress = profile.pendingBusinessAddress?.trim();
+  if (profile.pendingLocationStatus !== "pending" || !pendingAddress) {
+    return false;
+  }
+  return pendingAddress !== profile.businessAddress.trim();
+}
+
+export function isSellerPhoneChangePending(profile: SellerProfile): boolean {
+  const pendingPhone = profile.pendingPhone?.trim();
+  if (profile.pendingPhoneStatus !== "pending" || !pendingPhone) {
+    return false;
+  }
+  return pendingPhone !== profile.phone.trim();
+}
 
 // Create buyer profile
 export async function createBuyerProfile(
@@ -197,14 +281,37 @@ export async function createSellerProfile(
   return profile;
 }
 
-// Get user profile
+async function readDocFresh(ref: ReturnType<typeof doc>) {
+  try {
+    return await getDocFromServer(ref);
+  } catch {
+    return await getDoc(ref);
+  }
+}
+
+// Get user profile (server-first; sellers doc merged for admin-updated fields)
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   const ref = doc(db, "users", uid);
-  const snap = await getDoc(ref);
+  const snap = await readDocFresh(ref);
 
   if (!snap.exists()) return null;
 
-  return snap.data() as UserProfile;
+  const profile = snap.data() as UserProfile;
+
+  if (profile.role !== "seller") {
+    return profile;
+  }
+
+  try {
+    const sellerSnap = await readDocFresh(doc(db, "sellers", uid));
+    if (!sellerSnap.exists()) {
+      return profile;
+    }
+    return mergeSellerMirror(profile as SellerProfile, sellerSnap.data());
+  } catch (error) {
+    console.warn("Could not load sellers mirror for profile:", uid, error);
+    return profile;
+  }
 }
 
 // Update seller settings
@@ -266,6 +373,114 @@ export async function updateSellerProfile(
     sellerMirror.updatedAt = Timestamp.now();
     await setDoc(doc(db, "sellers", uid), sellerMirror, { merge: true });
   }
+}
+
+/**
+ * Queue a phone-number change for manual admin approval in Firestore.
+ * The live `phone` field stays unchanged until admin approves in Firebase Console.
+ *
+ * Firebase admin — approve phone (users/{uid} + sellers/{uid}):
+ * - phone = pendingPhone
+ * - pendingPhoneStatus = "approved"
+ * - delete pendingPhone, pendingPhoneSubmittedAt
+ */
+export async function requestSellerPhoneChange(
+  uid: string,
+  newPhone: string,
+): Promise<void> {
+  const trimmed = newPhone.trim();
+  if (!trimmed) {
+    throw new Error("Phone number is required");
+  }
+
+  const now = Timestamp.now();
+  const payload = {
+    pendingPhone: trimmed,
+    pendingPhoneStatus: "pending" as const,
+    pendingPhoneSubmittedAt: now,
+    updatedAt: now,
+  };
+
+  await updateDoc(doc(db, "users", uid), payload);
+  await setDoc(doc(db, "sellers", uid), payload, { merge: true });
+}
+
+export interface SellerLocationChangeInput {
+  businessAddress: string;
+  latitude: number;
+  longitude: number;
+  googlePlaceId: string;
+  googleMapsLink: string;
+}
+
+/**
+ * Submit a new Google Maps location for one-step admin approval.
+ * Active address/coordinates stay until admin approves in Firebase Console.
+ *
+ * Firebase admin — approve location (users/{uid} + sellers/{uid}):
+ * - businessAddress = pendingBusinessAddress
+ * - latitude = pendingLatitude, longitude = pendingLongitude (sellers doc)
+ * - googlePlaceId = pendingGooglePlaceId (sellers doc)
+ * - pendingLocationStatus = "approved"
+ * - delete: pendingBusinessAddress, pendingLatitude, pendingLongitude,
+ *   pendingGooglePlaceId, pendingGoogleMapsLink, pendingLocationSubmittedAt
+ * - optional: delete legacy locationEditPermission* fields if present
+ * - business-verified sellers: also set businessVerification.businessAddress
+ *   and businessVerification.googleMapsLink from pending values
+ *
+ * Firebase admin — reject location:
+ * - pendingLocationStatus = "rejected"
+ * - pendingLocationReviewNote = reason (optional)
+ */
+export async function requestSellerLocationChange(
+  uid: string,
+  input: SellerLocationChangeInput,
+): Promise<void> {
+  const profile = await getUserProfile(uid);
+  if (!profile || profile.role !== "seller") {
+    throw new Error("Seller profile not found");
+  }
+
+  const seller = profile as SellerProfile;
+  if (seller.pendingLocationStatus === "pending") {
+    throw new Error("A location change is already pending admin approval");
+  }
+
+  const trimmedAddress = input.businessAddress.trim();
+  if (!trimmedAddress) {
+    throw new Error("Location is required");
+  }
+  if (
+    !Number.isFinite(input.latitude) ||
+    !Number.isFinite(input.longitude)
+  ) {
+    throw new Error("Valid map coordinates are required");
+  }
+  if (!input.googlePlaceId?.trim()) {
+    throw new Error("Select a valid location from Google Maps");
+  }
+  if (!input.googleMapsLink?.trim()) {
+    throw new Error("A Google Maps link is required");
+  }
+
+  const now = Timestamp.now();
+  const payload: Record<string, unknown> = {
+    pendingLocationStatus: "pending",
+    pendingBusinessAddress: trimmedAddress,
+    pendingLatitude: input.latitude,
+    pendingLongitude: input.longitude,
+    pendingGooglePlaceId: input.googlePlaceId.trim(),
+    pendingGoogleMapsLink: input.googleMapsLink.trim(),
+    pendingLocationSubmittedAt: now,
+    locationEditPermissionStatus: deleteField(),
+    locationEditPermissionRequestedAt: deleteField(),
+    locationEditPermissionReviewedAt: deleteField(),
+    locationEditPermissionReviewNote: deleteField(),
+    updatedAt: now,
+  };
+
+  await updateDoc(doc(db, "users", uid), payload);
+  await setDoc(doc(db, "sellers", uid), payload, { merge: true });
 }
 
 // Generic update user profile

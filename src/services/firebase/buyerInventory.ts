@@ -10,6 +10,13 @@ import {
 import { db } from "./config";
 import { computeLiveListingPrice } from "@/src/services/pricing/dynamicPricing";
 import { getListingFloor } from "@/src/utils/listingPrices";
+import {
+  extractStateFromAddress,
+  malaysianStatesMatch,
+  normalizeMalaysianState,
+  type MalaysianState,
+  resolveStateFromGeocode,
+} from "@/src/utils/malaysianState";
 import { InventoryItem, inventoryService } from "./inventoryServices";
 
 export interface AvailableBag extends InventoryItem {
@@ -19,6 +26,9 @@ export interface AvailableBag extends InventoryItem {
   rating: number;
   latitude: number;
   longitude: number;
+  googlePlaceId?: string;
+  businessAddress?: string;
+  sellerRegistrationPhotoUrl?: string;
   /** Seller list floor before live smart-pricing markdown (Firestore values). */
   listFloorPrice: number;
   /** Extra markdown % applied on top of list floor when smart pricing is on. */
@@ -39,6 +49,40 @@ const toNumber = (value: unknown): number | null => {
   }
   return null;
 };
+
+/** Storefront (business) or workspace/pickup photo (manual) from seller registration. */
+export function pickSellerRegistrationPhoto(
+  sellerData: Record<string, unknown>,
+): string | undefined {
+  const business = sellerData.businessVerification as
+    | { storefrontImageUrl?: string }
+    | undefined;
+  const storefront = business?.storefrontImageUrl?.trim();
+  if (storefront) return storefront;
+
+  const manual = sellerData.manualVerification as
+    | {
+        workspacePhotoUrls?: string[];
+        sampleProductPhotoUrls?: string[];
+      }
+    | undefined;
+
+  const workspace = manual?.workspacePhotoUrls?.find(
+    (url) => typeof url === "string" && url.trim().length > 0,
+  );
+  if (workspace?.trim()) return workspace.trim();
+
+  const sample = manual?.sampleProductPhotoUrls?.find(
+    (url) => typeof url === "string" && url.trim().length > 0,
+  );
+  if (sample?.trim()) return sample.trim();
+
+  const profileImage =
+    typeof sellerData.profileImageUrl === "string"
+      ? sellerData.profileImageUrl.trim()
+      : "";
+  return profileImage || undefined;
+}
 
 const extractCoordinates = (
   sellerData: Record<string, any>,
@@ -127,15 +171,83 @@ const getDistance = (
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
+const resolveStateFromCoordinates = async (
+  coords: Coordinates,
+  cache: Map<string, MalaysianState | null>,
+): Promise<MalaysianState | null> => {
+  const cacheKey = `${coords.latitude.toFixed(3)},${coords.longitude.toFixed(3)}`;
+  if (cache.has(cacheKey)) {
+    return cache.get(cacheKey) ?? null;
+  }
+
+  try {
+    const results = await Location.reverseGeocodeAsync(coords);
+    const state = results[0] ? resolveStateFromGeocode(results[0]) : null;
+    cache.set(cacheKey, state);
+    return state;
+  } catch (error) {
+    console.warn("Could not reverse-geocode coordinates for state filter:", error);
+    cache.set(cacheKey, null);
+    return null;
+  }
+};
+
+const resolveSellerState = async (
+  sellerData: Record<string, any>,
+  sellerCoords: Coordinates,
+  cache: Map<string, MalaysianState | null>,
+): Promise<MalaysianState | null> => {
+  const address =
+    typeof sellerData.businessAddress === "string"
+      ? sellerData.businessAddress.trim()
+      : "";
+  const fromAddress = address ? extractStateFromAddress(address) : null;
+  if (fromAddress) return fromAddress;
+
+  return resolveStateFromCoordinates(sellerCoords, cache);
+};
+
+const resolveBuyerState = async (
+  userLocation: {
+    latitude: number;
+    longitude: number;
+    locationLabel?: string;
+  },
+  cache: Map<string, MalaysianState | null>,
+): Promise<MalaysianState | null> => {
+  const fromCoords = await resolveStateFromCoordinates(
+    {
+      latitude: userLocation.latitude,
+      longitude: userLocation.longitude,
+    },
+    cache,
+  );
+  if (fromCoords) return fromCoords;
+
+  const label = userLocation.locationLabel?.trim();
+  if (!label) return null;
+
+  return extractStateFromAddress(label) ?? normalizeMalaysianState(label);
+};
+
 // 🎯 MAIN FUNCTION
 export const getAvailableBags = async (userLocation: {
   latitude: number;
   longitude: number;
+  locationLabel?: string;
 }): Promise<AvailableBag[]> => {
   try {
+    const stateCache = new Map<string, MalaysianState | null>();
+    const buyerState = await resolveBuyerState(userLocation, stateCache);
+
+    if (!buyerState) {
+      console.warn(
+        "Buyer state could not be resolved — showing no cross-state listings.",
+      );
+      return [];
+    }
+
     const nearbyBags: AvailableBag[] = [];
-    const allLocatedBags: AvailableBag[] = [];
-    const RADIUS_KM = 5;
 
     // Get all sellers
     const sellersSnapshot = await getDocs(collection(db, "sellers"));
@@ -179,6 +291,15 @@ export const getAvailableBags = async (userLocation: {
       // Skip sellers that still have no usable location
       if (!sellerCoords) continue;
 
+      const sellerState = await resolveSellerState(
+        sellerData,
+        sellerCoords,
+        stateCache,
+      );
+      if (!malaysianStatesMatch(buyerState, sellerState)) {
+        continue;
+      }
+
       // 📏 Calculate distance from user
       const distance = getDistance(
         userLocation.latitude,
@@ -195,6 +316,8 @@ export const getAvailableBags = async (userLocation: {
       );
 
       const inventorySnapshot = await getDocs(activeQuery);
+
+      const registrationPhotoUrl = pickSellerRegistrationPhoto(sellerData);
 
       inventorySnapshot.forEach((doc) => {
         const item = doc.data() as InventoryItem;
@@ -218,6 +341,15 @@ export const getAvailableBags = async (userLocation: {
             rating: 4.8, // you can replace later
             latitude: sellerCoords.latitude,
             longitude: sellerCoords.longitude,
+            googlePlaceId:
+              typeof sellerData.googlePlaceId === "string"
+                ? sellerData.googlePlaceId
+                : undefined,
+            businessAddress:
+              typeof sellerData.businessAddress === "string"
+                ? sellerData.businessAddress
+                : undefined,
+            sellerRegistrationPhotoUrl: registrationPhotoUrl,
             listFloorPrice: listFloor,
             price: live.price,
             discountedPrice: live.discountedPrice,
@@ -226,17 +358,12 @@ export const getAvailableBags = async (userLocation: {
             smartAbVariant: live.smartAbVariant,
           };
 
-          allLocatedBags.push(bag);
-          if (distance <= RADIUS_KM) {
-            nearbyBags.push(bag);
-          }
+          nearbyBags.push(bag);
         }
       });
     }
 
-    // Prefer nearby sellers, but fall back to all located sellers so the map is never empty when stock exists.
-    const result = nearbyBags.length > 0 ? nearbyBags : allLocatedBags;
-    return result.sort((a, b) => a.distance - b.distance);
+    return nearbyBags.sort((a, b) => a.distance - b.distance);
   } catch (error) {
     console.error("Error fetching available bags:", error);
     return [];

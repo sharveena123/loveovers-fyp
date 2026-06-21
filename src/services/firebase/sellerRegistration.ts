@@ -143,8 +143,8 @@ export async function registerSellerAccount(
     profileImageUrl,
     verificationType: input.verificationType,
     verificationStatus,
-    businessVerification,
-    manualVerification,
+    ...(businessVerification ? { businessVerification } : {}),
+    ...(manualVerification ? { manualVerification } : {}),
     tier: "Free",
     operatingHours: {
       monday: "7:00 AM - 8:00 PM",
@@ -176,9 +176,9 @@ export async function registerSellerAccount(
     profileImageUrl,
     verificationType: input.verificationType,
     verificationStatus,
-    businessVerification,
-    manualVerification,
-    googlePlaceId: input.googlePlaceId,
+    ...(businessVerification ? { businessVerification } : {}),
+    ...(manualVerification ? { manualVerification } : {}),
+    ...(input.googlePlaceId ? { googlePlaceId: input.googlePlaceId } : {}),
     isActive: verificationStatus === "approved",
     tier: "Free",
     createdAt: now,
@@ -204,12 +204,15 @@ export async function registerSellerAccount(
     phone: profile.phone,
     verificationType: input.verificationType,
     verificationStatus,
-    businessVerification,
-    manualVerification,
+    ...(businessVerification ? { businessVerification } : {}),
+    ...(manualVerification ? { manualVerification } : {}),
     profileImageUrl,
     submittedAt: now,
     updatedAt: now,
   });
+
+  // Firebase admin — approve manual seller (users/{uid}, sellers/{uid}, sellerVerifications/{uid}):
+  // verificationStatus = "approved", isActive = true (sellers only), verificationReviewedAt = now
 
   return { uid, profile };
 }

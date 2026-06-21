@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   query,
   setDoc,
   Timestamp,
@@ -65,6 +66,34 @@ export interface BuyerOrder {
     | "cancelled";
   createdAt: Timestamp | Date;
   updatedAt: Timestamp | Date;
+}
+
+/**
+ * Adjusts the `sold` counter on each ordered inventory item.
+ * `direction = 1` records a sale; `direction = -1` restores stock (cancellation).
+ * Failures are logged but never block the order flow.
+ */
+async function adjustInventorySold(
+  items: Pick<OrderItem, "id" | "sellerId" | "quantity">[],
+  direction: 1 | -1,
+): Promise<void> {
+  await Promise.all(
+    items.map(async (item) => {
+      if (!item.id || !item.sellerId) return;
+      try {
+        const itemRef = doc(db, "sellers", item.sellerId, "inventory", item.id);
+        await updateDoc(itemRef, {
+          sold: increment(direction * Math.max(0, item.quantity || 0)),
+          updatedAt: Timestamp.now(),
+        });
+      } catch (error) {
+        console.warn(
+          `Could not update sold count for inventory item ${item.id}:`,
+          error,
+        );
+      }
+    }),
+  );
 }
 
 // Create a new order from cart
@@ -160,6 +189,9 @@ export const createOrderFromCart = async (
       console.error("Error creating seller orders:", sellerError);
     }
 
+    // Record the sale on each listing so stock counts and rescue stats stay accurate.
+    await adjustInventorySold(items, 1);
+
     return orderDocRef.id;
   } catch (error) {
     console.error("Error creating order from cart:", error);
@@ -168,7 +200,7 @@ export const createOrderFromCart = async (
 };
 
 /** Combine multiple seller-side statuses for one buyer checkout. */
-function aggregateSellerStatuses(
+export function aggregateSellerStatuses(
   statuses: string[],
 ): BuyerOrder["orderStatus"] | null {
   const normalized = statuses.map((s) => String(s || "pending").toLowerCase());
@@ -371,6 +403,15 @@ export const updateOrderStatus = async (
       status,
       updatedAt: Timestamp.now(),
     });
+
+    // Return stock to the listing when an order is cancelled.
+    const previousStatus = String(data.status || "pending");
+    if (status === "cancelled" && previousStatus !== "cancelled") {
+      await adjustInventorySold(
+        (data.items || []) as OrderItem[],
+        -1,
+      );
+    }
 
     const buyerId = (data.buyerId ?? data.customerId) as string | undefined;
     const buyerOrderId = data.orderId as string | undefined;

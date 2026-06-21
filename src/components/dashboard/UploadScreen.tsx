@@ -19,6 +19,7 @@ import {
   View,
 } from "react-native";
 import { assessDataset, trainModel, updateAssessment } from "../../ai/api";
+import { getAiErrorMessage } from "../../ai/errors";
 import { DatasetAssessment, TrainingResult } from "../../ai/types";
 
 interface UploadAndTrainScreenProps {
@@ -174,14 +175,8 @@ export function UploadAndTrainScreen({
           (result.missing_required || []).length > 0,
       );
     } catch (error: unknown) {
-      const message = String(error);
-      const networkHint =
-        message.includes("Network request failed") ||
-        message.includes("timed out") ||
-        message.includes("Failed to connect")
-          ? "\n\nMake sure you are on the same Wi‑Fi as your shop computer and the bake planner service is running."
-          : "";
-      Alert.alert("Could not read your file", `${message}${networkHint}`);
+      const { title, message } = getAiErrorMessage(error, "assess");
+      Alert.alert(title, message);
       setStep("upload");
     } finally {
       setLoading(false);
@@ -258,7 +253,8 @@ export function UploadAndTrainScreen({
         `We saved your sales history for ${result.cafe_name}. You can now get bake suggestions for ${result.items.length} products.`,
       );
     } catch (error: unknown) {
-      Alert.alert("Could not save your file", String(error));
+      const { title, message } = getAiErrorMessage(error, "train");
+      Alert.alert(title, message);
       setStep("review");
     } finally {
       setLoading(false);

@@ -61,6 +61,28 @@ const parseDate = (raw: string): Date | null => {
 const shortDay = (d: Date): string =>
   ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
 
+const MONTHS_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/** Distinct axis label per calendar day (avoids repeating "Mon" across weeks). */
+const formatChartDateLabel = (dateKey: string): string => {
+  const parsed = parseDate(dateKey);
+  if (!parsed) return dateKey.slice(5);
+  return `${shortDay(parsed)} ${parsed.getDate()} ${MONTHS_SHORT[parsed.getMonth()]}`;
+};
+
 const formatDateKey = (d: Date): string => d.toISOString().split("T")[0];
 
 const normalizeDay = (value: string): string => {
@@ -407,11 +429,12 @@ export function buildAnalyticsFromRecords(
     dailyPredicted.set(dateKey, Math.round(avg));
   });
 
-  const salesOverTime = sortedDates.slice(-14).map((dateKey) => {
+  const chartDateKeys = sortedDates.slice(-14);
+
+  const salesOverTime = chartDateKeys.map((dateKey) => {
     const d = byDate.get(dateKey)!;
-    const parsed = parseDate(dateKey);
     return {
-      label: parsed ? shortDay(parsed) : dateKey.slice(5),
+      label: formatChartDateLabel(dateKey),
       date: dateKey,
       sales: Math.round(d.sales),
       orders: d.orders,
@@ -443,12 +466,12 @@ export function buildAnalyticsFromRecords(
     color: CHART_COLORS[i % CHART_COLORS.length],
   }));
 
-  const actualVsPredicted = sortedDates.slice(-10).map((dateKey) => {
+  const actualVsPredicted = chartDateKeys.map((dateKey) => {
     const actual = byDate.get(dateKey)?.sold ?? 0;
     const predicted = dailyPredicted.get(dateKey) ?? actual;
-    const parsed = parseDate(dateKey);
     return {
-      label: parsed ? shortDay(parsed) : dateKey.slice(5),
+      label: formatChartDateLabel(dateKey),
+      date: dateKey,
       actual: Math.round(actual),
       predicted: Math.round(predicted),
     };
@@ -456,6 +479,7 @@ export function buildAnalyticsFromRecords(
 
   const surplusTrend = salesOverTime.map((d) => ({
     label: d.label,
+    date: d.date,
     surplus: d.waste,
     sold: d.sold,
   }));

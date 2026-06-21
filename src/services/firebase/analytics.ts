@@ -76,38 +76,48 @@ export const getDashboardStats = async (
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
 
-    // Get today's orders
+    // One pass over all orders: today/yesterday revenue + units sold per listing.
     const ordersRef = collection(db, "sellers", sellerId, "orders");
-    const todayQuery = query(
-      ordersRef,
-      where("createdAt", ">=", Timestamp.fromDate(today)),
-    );
-    const todaySnapshot = await getDocs(todayQuery);
+    const ordersSnapshot = await getDocs(ordersRef);
 
     let todayRevenue = 0;
     let bagsSoldToday = 0;
-
-    todaySnapshot.forEach((doc) => {
-      const data = doc.data();
-      todayRevenue += data.total || 0;
-      bagsSoldToday += data.quantity || 1;
-    });
-
-    // Get yesterday's stats for comparison
-    const yesterdayQuery = query(
-      ordersRef,
-      where("createdAt", ">=", Timestamp.fromDate(yesterday)),
-      where("createdAt", "<", Timestamp.fromDate(today)),
-    );
-    const yesterdaySnapshot = await getDocs(yesterdayQuery);
-
     let yesterdayRevenue = 0;
     let yesterdayBags = 0;
+    /** Inventory listing id -> units sold across non-cancelled orders. */
+    const soldByListingId = new Map<string, number>();
 
-    yesterdaySnapshot.forEach((doc) => {
+    ordersSnapshot.forEach((doc) => {
       const data = doc.data();
-      yesterdayRevenue += data.total || 0;
-      yesterdayBags += data.quantity || 1;
+      if (String(data.status || "pending") === "cancelled") return;
+
+      const items = (data.items || []) as Array<{
+        id?: string;
+        quantity?: number;
+      }>;
+      let orderUnits = 0;
+      for (const item of items) {
+        const qty = item.quantity || 1;
+        orderUnits += qty;
+        if (item.id) {
+          soldByListingId.set(item.id, (soldByListingId.get(item.id) || 0) + qty);
+        }
+      }
+      if (orderUnits === 0) orderUnits = 1;
+
+      const createdAt =
+        data.createdAt && typeof data.createdAt.toDate === "function"
+          ? data.createdAt.toDate()
+          : null;
+      if (!createdAt) return;
+
+      if (createdAt >= today) {
+        todayRevenue += data.total || 0;
+        bagsSoldToday += orderUnits;
+      } else if (createdAt >= yesterday) {
+        yesterdayRevenue += data.total || 0;
+        yesterdayBags += orderUnits;
+      }
     });
 
     // Calculate percentage changes
@@ -125,12 +135,8 @@ export const getDashboardStats = async (
     const inventorySnapshot = await getDocs(inventoryRef);
 
     let itemsExpiring = 0;
-    let todayTotalProduced = 0;
-    let todayTotalSold = 0;
-    let todayWaste = 0;
-    let yesterdayTotalProduced = 0;
-    let yesterdayTotalSold = 0;
-    let yesterdayWaste = 0;
+    let totalListed = 0;
+    let totalSold = 0;
 
     const twoHoursFromNow = new Date();
     twoHoursFromNow.setHours(twoHoursFromNow.getHours() + 2);
@@ -146,48 +152,29 @@ export const getDashboardStats = async (
         }
       }
 
-      // Calculate waste based on created date
-      if (data.createdAt) {
-        const createdDate = data.createdAt.toDate();
-        createdDate.setHours(0, 0, 0, 0);
-
-        const produced = data.quantity || 0;
-        const sold = data.sold || 0;
-        const waste = Math.max(0, produced - sold);
-
-        if (createdDate.getTime() === today.getTime()) {
-          todayTotalProduced += produced;
-          todayTotalSold += sold;
-          todayWaste += waste;
-        } else if (createdDate.getTime() === yesterday.getTime()) {
-          yesterdayTotalProduced += produced;
-          yesterdayTotalSold += sold;
-          yesterdayWaste += waste;
-        }
-      }
+      // Waste reduced = % of listed stock rescued across all listings.
+      // Use order line items only — the inventory `sold` counter can drift
+      // (e.g. cancelled orders, deleted orders, or test checkouts).
+      const listed = data.quantity || 0;
+      const soldFromOrders = soldByListingId.get(doc.id) || 0;
+      const sold = Math.min(listed, soldFromOrders);
+      totalListed += listed;
+      totalSold += sold;
     });
 
-    // Calculate waste reduction percentage
-    const todayWastePercentage =
-      todayTotalProduced > 0
-        ? ((todayTotalProduced - todayWaste) / todayTotalProduced) * 100
-        : 0;
+    const wasteReduction =
+      totalListed > 0 ? Math.round((totalSold / totalListed) * 100) : 0;
 
-    const yesterdayWastePercentage =
-      yesterdayTotalProduced > 0
-        ? ((yesterdayTotalProduced - yesterdayWaste) / yesterdayTotalProduced) *
-          100
-        : 0;
-
+    // Day-over-day change in units sold (operational trend for the badge).
     const wasteChange =
-      yesterdayWastePercentage > 0
-        ? todayWastePercentage - yesterdayWastePercentage
+      yesterdayBags > 0
+        ? ((bagsSoldToday - yesterdayBags) / yesterdayBags) * 100
         : 0;
 
     return {
       todayRevenue,
       bagsSoldToday,
-      wasteReduction: Math.round(todayWastePercentage),
+      wasteReduction,
       itemsExpiring,
       revenueChange,
       bagsChange,
